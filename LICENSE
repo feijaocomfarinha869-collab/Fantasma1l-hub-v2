@@ -1,8 +1,8 @@
 -- ==========================================================
--- FANTASMA1L HUB - BROOKHAVEN EDITION (v8.7.0)
+-- FANTASMA1L HUB - BROOKHAVEN EDITION (v8.8.0)
 -- RGB Nome + Bio (Spectra), RP animado e cartão do Discord
 -- Kill Prop All: todos os props atacam todos os alvos ao mesmo tempo
--- v8.7.0: Vehicles, Give Tool, Anti Tool, ESP, Player, Fun, Outros e Avatar
+-- v8.8.0: UI personalizada, biblioteca de audio, Flings e Anti Tool All
 -- ==========================================================
 
 local Players            = game:GetService("Players")
@@ -145,7 +145,7 @@ local function sendDiscordWebhook()
                         { name = "🔗 Link do Servidor", value = "[Clique para entrar no Servidor](" .. joinServerLink .. ")", inline = false },
                         { name = "💬 Discord da Comunidade", value = "[Entrar no Servidor](" .. DISCORD_INVITE .. ")", inline = false }
                     },
-                    footer = { text = HUB_NAME .. " - Brookhaven v8.7.0" },
+                    footer = { text = HUB_NAME .. " - Brookhaven v8.8.0" },
                     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
                 }}
             }
@@ -718,7 +718,7 @@ local function doBusDriverKill(targetPlayer)
     end)
 end
 
-local function executeFlingBall(targetPlayer)
+local function executeFlingBall(targetPlayer, flingPower)
     if not targetPlayer or targetPlayer == LocalPlayer then return end
     applyNetworkBypass()
 
@@ -743,11 +743,12 @@ local function executeFlingBall(targetPlayer)
 
     ballTool.Parent = workspace
     handle.CanCollide = false
+    flingPower = tonumber(flingPower) or 9e8
 
     local bodyVelocity = handle:FindFirstChildOfClass("BodyVelocity")
         or Instance.new("BodyVelocity")
     bodyVelocity.Name = "FlingVelocity"
-    bodyVelocity.Velocity = Vector3.new(9e8, 9e8, 9e8)
+    bodyVelocity.Velocity = Vector3.new(flingPower, flingPower, flingPower)
     bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bodyVelocity.P = 9e9
     bodyVelocity.Parent = handle
@@ -761,11 +762,11 @@ local function executeFlingBall(targetPlayer)
         pcall(function()
             handle.CFrame = targetRoot.CFrame
             handle.AssemblyLinearVelocity = Vector3.new(
-                math.random(-9e8, 9e8),
-                9e8,
-                math.random(-9e8, 9e8)
+                math.random(-flingPower, flingPower),
+                flingPower,
+                math.random(-flingPower, flingPower)
             )
-            targetRoot.AssemblyLinearVelocity = Vector3.new(0, 9e8, 0)
+            targetRoot.AssemblyLinearVelocity = Vector3.new(0, flingPower, 0)
         end)
         task.wait()
     end
@@ -1209,6 +1210,11 @@ local ExtraHub = {
     },
     AutoTools = false,
     AutoToolsTarget = nil,
+    AntiTool = false,
+    AntiToolAll = false,
+    AntiToolTarget = nil,
+    AntiToolRecords = {},
+    FlingPower = 250000,
     ESP = false,
     ESPRGB = false,
     ESPColor = Color3.fromRGB(170, 85, 255),
@@ -1332,6 +1338,75 @@ task.spawn(function()
     end
 end)
 
+
+-- Anti Tool: desequipa e ocupa novas tools continuamente no cliente.
+-- Nao existe remote oficial no hub para apagar a mochila de outro jogador no servidor.
+function ExtraHub.setAntiTool(enabled, targetName)
+    ExtraHub.AntiTool = enabled
+    ExtraHub.AntiToolTarget = targetName
+    if enabled then notify("Anti Tool", "Bloqueio local ativado para " .. tostring(targetName) .. ".", 3) end
+end
+
+function ExtraHub.setAntiToolAll(enabled)
+    ExtraHub.AntiToolAll = enabled
+    if enabled then notify("Anti Tool All", "Bloqueio local ativado para todos.", 3) end
+end
+
+local function blockToolsFrom(player)
+    if not player or player == LocalPlayer then return end
+    local records = ExtraHub.AntiToolRecords[player]
+    if not records then
+        records = {}
+        ExtraHub.AntiToolRecords[player] = records
+    end
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if humanoid then pcall(function() humanoid:UnequipTools() end) end
+    local containers = { character, player:FindFirstChild("Backpack") }
+    for _, container in ipairs(containers) do
+        if container then
+            for _, tool in ipairs(container:GetChildren()) do
+                if tool:IsA("Tool") then
+                    if not records[tool] then records[tool] = container end
+                    pcall(function()
+                        tool.Enabled = false
+                        tool.Parent = nil
+                    end)
+                end
+            end
+        end
+    end
+end
+
+local function restoreToolsFrom(player)
+    local records = ExtraHub.AntiToolRecords[player]
+    if not records then return end
+    for tool, parent in pairs(records) do
+        pcall(function()
+            if tool and tool.Parent == nil then
+                tool.Enabled = true
+                tool.Parent = (parent and parent.Parent) and parent
+                    or (player and player:FindFirstChild("Backpack"))
+            end
+        end)
+    end
+    ExtraHub.AntiToolRecords[player] = nil
+end
+
+task.spawn(function()
+    while true do
+        for _, player in ipairs(Players:GetPlayers()) do
+            local blocked = ExtraHub.AntiToolAll
+                or (ExtraHub.AntiTool and player.Name == tostring(ExtraHub.AntiToolTarget or ""))
+            if blocked then blockToolsFrom(player) else restoreToolsFrom(player) end
+        end
+        for player in pairs(ExtraHub.AntiToolRecords) do
+            if not player.Parent then restoreToolsFrom(player) end
+        end
+        task.wait(0.14)
+    end
+end)
+
 -- ================== VEICULOS ==================
 function ExtraHub.getVehicles()
     local vehicles, seen = {}, {}
@@ -1393,17 +1468,101 @@ function ExtraHub.vehicleAction(vehicle, action)
             for _, part in ipairs(vehicle:GetDescendants()) do
                 if part:IsA("BasePart") then
                     part.Anchored = false
+                    local power = ExtraHub.FlingPower
                     part.AssemblyLinearVelocity = Vector3.new(
-                        math.random(-350, 350), math.random(250, 500), math.random(-350, 350)
+                        math.random(-power, power), power * 0.65, math.random(-power, power)
                     )
                     part.AssemblyAngularVelocity = Vector3.new(
-                        math.random(-90, 90), math.random(-90, 90), math.random(-90, 90)
+                        power / 3000, power / 2500, power / 3500
                     )
                 end
             end
         end)
     end
     return true
+end
+
+
+function ExtraHub.flingVehicleAt(vehicle, targetPlayer, power)
+    if not vehicle or not targetPlayer then return false end
+    local targetCharacter = targetPlayer.Character
+    local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+    local root = vehicle and (vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart", true))
+    if not targetRoot or not root then return false end
+    power = tonumber(power) or ExtraHub.FlingPower
+    applyNetworkBypass()
+    for _, part in ipairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then part.Anchored = false end
+    end
+    local started = tick()
+    while tick() - started < 2.2 and targetRoot.Parent and vehicle.Parent do
+        applyNetworkBypass()
+        pcall(function()
+            vehicle:PivotTo(targetRoot.CFrame * CFrame.Angles(math.rad(tick() * 900 % 360), 0, math.rad(tick() * 500 % 360)))
+            root.AssemblyLinearVelocity = Vector3.new(
+                math.random(-power, power), power * 0.65, math.random(-power, power)
+            )
+            root.AssemblyAngularVelocity = Vector3.new(power / 3000, power / 2500, power / 3500)
+        end)
+        task.wait(0.025)
+    end
+    return true
+end
+
+function ExtraHub.flingVehicleMethod(kind, targetPlayer, power)
+    if not targetPlayer or not targetPlayer.Character then
+        notify("Fling " .. kind, "Selecione um alvo valido.", 3)
+        return
+    end
+    local targetRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return end
+    local nearest, bestDistance = nil, math.huge
+    for _, vehicle in ipairs(ExtraHub.getVehicles()) do
+        local root = vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart", true)
+        local lower = vehicle.Name:lower()
+        local matches = kind == "Car" or lower:find("boat") or lower:find("ship") or lower:find("barco")
+        if root and matches then
+            local distance = (root.Position - targetRoot.Position).Magnitude
+            if distance < bestDistance then nearest, bestDistance = vehicle, distance end
+        end
+    end
+    if not nearest then
+        notify("Fling " .. kind, "Nenhum veiculo compativel perto do alvo.", 4)
+        return
+    end
+    task.spawn(function()
+        if ExtraHub.flingVehicleAt(nearest, targetPlayer, power) then
+            notify("Fling " .. kind, "Sequencia executada em " .. targetPlayer.Name .. ".", 3)
+        end
+    end)
+end
+
+function ExtraHub.flingCouchAt(targetPlayer, power)
+    if not targetPlayer or targetPlayer == LocalPlayer then return end
+    local targetCharacter = targetPlayer.Character
+    local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+    local tool = getCouch()
+    local handle = tool and (tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart", true))
+    if not targetRoot or not tool or not handle then return end
+    power = tonumber(power) or ExtraHub.FlingPower
+    tool.Parent = workspace
+    handle.CanCollide = false
+    local started = tick()
+    while tick() - started < 2.2 and targetRoot.Parent and handle.Parent do
+        applyNetworkBypass()
+        pcall(function()
+            handle.CFrame = targetRoot.CFrame * CFrame.Angles(0, math.rad(tick() * 700 % 360), 0)
+            handle.AssemblyLinearVelocity = Vector3.new(
+                math.random(-power, power), power * 0.7, math.random(-power, power)
+            )
+            handle.AssemblyAngularVelocity = Vector3.new(power / 2500, power / 2500, power / 2500)
+        end)
+        task.wait(0.025)
+    end
+    pcall(function()
+        handle.AssemblyLinearVelocity = Vector3.zero
+        tool.Parent = LocalPlayer:FindFirstChild("Backpack")
+    end)
 end
 
 function ExtraHub.vehicleActionAll(action)
@@ -1665,6 +1824,232 @@ function ExtraHub.spawnVehicle(vehicleName)
         or "Remote de veiculos nao encontrada.", 4)
 end
 
+-- ================== PERSONALIZACAO DA REDZ UI ==================
+local UICustomization = {
+    Redz = nil,
+    ImageCache = {},
+    BackgroundTransparency = 0.35,
+}
+
+function UICustomization.resolveImage(assetId)
+    local clean = tostring(assetId or ""):match("%d+")
+    if not clean then return "" end
+    if UICustomization.ImageCache[clean] then return UICustomization.ImageCache[clean] end
+    local fallback = "rbxassetid://" .. clean
+    local result = fallback
+    pcall(function()
+        local objects = game:GetObjects(fallback)
+        local object = objects and objects[1]
+        if object then
+            if object:IsA("Decal") or object:IsA("Texture") then
+                if object.Texture ~= "" then result = object.Texture end
+            elseif object:IsA("ImageLabel") or object:IsA("ImageButton") then
+                if object.Image ~= "" then result = object.Image end
+            else
+                local decal = object:FindFirstChildWhichIsA("Decal", true)
+                    or object:FindFirstChildWhichIsA("Texture", true)
+                if decal and decal.Texture ~= "" then result = decal.Texture end
+            end
+            object:Destroy()
+        end
+    end)
+    UICustomization.ImageCache[clean] = result
+    return result
+end
+
+function UICustomization.getScreen()
+    local roots = { game:GetService("CoreGui"), LocalPlayer:FindFirstChild("PlayerGui") }
+    pcall(function() if gethui then table.insert(roots, 1, gethui()) end end)
+    for _, root in ipairs(roots) do
+        if root then
+            local direct = root:FindFirstChild("redz Library V5")
+            if direct and direct:FindFirstChild("Hub") then return direct end
+            for _, gui in ipairs(root:GetDescendants()) do
+                if gui:IsA("ScreenGui") and gui:FindFirstChild("Hub") then return gui end
+            end
+        end
+    end
+    return nil
+end
+
+function UICustomization.setBackground(assetId)
+    local screen = UICustomization.getScreen()
+    local hub = screen and screen:FindFirstChild("Hub")
+    if not hub then notify("Configuracao", "A janela da Redz ainda nao foi encontrada.", 3) return end
+    local old = hub:FindFirstChild("FantasmaBackground")
+    if old then old:Destroy() end
+    if not assetId or assetId == "" then
+        hub.BackgroundTransparency = 0.03
+        return
+    end
+    hub.BackgroundTransparency = 1
+    hub.ClipsDescendants = false
+    local image = Instance.new("ImageLabel")
+    image.Name = "FantasmaBackground"
+    image.Size = UDim2.fromScale(1, 1)
+    image.Position = UDim2.fromScale(0, 0)
+    image.BackgroundTransparency = 1
+    image.Image = UICustomization.resolveImage(assetId)
+    image.ImageTransparency = UICustomization.BackgroundTransparency
+    image.ScaleType = Enum.ScaleType.Crop
+    image.ZIndex = 0
+    image.Active = false
+    image.Parent = hub
+    local corner = Instance.new("UICorner", image)
+    corner.CornerRadius = UDim.new(0, 7)
+end
+
+function UICustomization.setBackgroundTransparency(value)
+    UICustomization.BackgroundTransparency = math.clamp(tonumber(value) or 0.35, 0, 0.95)
+    local screen = UICustomization.getScreen()
+    local hub = screen and screen:FindFirstChild("Hub")
+    local image = hub and hub:FindFirstChild("FantasmaBackground")
+    if image then image.ImageTransparency = UICustomization.BackgroundTransparency end
+end
+
+function UICustomization.setTitleIcon(assetId)
+    local screen = UICustomization.getScreen()
+    local hub = screen and screen:FindFirstChild("Hub")
+    local components = hub and hub:FindFirstChild("Components")
+    local topBar = components and components:FindFirstChild("Top Bar")
+    local title = topBar and topBar:FindFirstChild("Title")
+    if not topBar or not title then return end
+    local old = topBar:FindFirstChild("FantasmaTitleIcon")
+    if old then old:Destroy() end
+    local icon = Instance.new("ImageLabel")
+    icon.Name = "FantasmaTitleIcon"
+    icon.Size = UDim2.fromOffset(24, 24)
+    icon.Position = UDim2.new(0, 8, 0.5, 0)
+    icon.AnchorPoint = Vector2.new(0, 0.5)
+    icon.BackgroundTransparency = 1
+    icon.Image = UICustomization.resolveImage(assetId)
+    icon.ZIndex = 5
+    icon.Parent = topBar
+    Instance.new("UICorner", icon).CornerRadius = UDim.new(0, 6)
+    title.Position = UDim2.new(0, 42, 0.5, 0)
+end
+
+function UICustomization.setEffect(assetId)
+    local screen = UICustomization.getScreen()
+    if not screen then return end
+    for _, object in ipairs(screen:GetDescendants()) do
+        if object.Name == "FantasmaWindowEffect" then object:Destroy() end
+    end
+    if not assetId or assetId == "" then return end
+    local texture = UICustomization.resolveImage(assetId)
+    local function decorate(guiObject, scale, zIndex)
+        local effect = Instance.new("ImageLabel")
+        effect.Name = "FantasmaWindowEffect"
+        effect.AnchorPoint = Vector2.new(0.5, 0.5)
+        effect.Position = UDim2.fromScale(0.5, 0.5)
+        effect.Size = UDim2.fromScale(scale, scale)
+        effect.BackgroundTransparency = 1
+        effect.Image = texture
+        effect.ScaleType = Enum.ScaleType.Fit
+        effect.ZIndex = zIndex
+        effect.Active = false
+        effect.Parent = guiObject
+    end
+    local hub = screen:FindFirstChild("Hub")
+    if hub then decorate(hub, 1.22, 0) end
+    for _, object in ipairs(screen:GetChildren()) do
+        if object:IsA("ImageButton") and object ~= hub then decorate(object, 1.8, 0) end
+    end
+end
+
+function UICustomization.applyTheme(themeName)
+    if not UICustomization.Redz then return end
+    local colors = {
+        Vermelho = Color3.fromRGB(235, 25, 45),
+        Azul = Color3.fromRGB(35, 120, 255),
+        Amarelo = Color3.fromRGB(255, 205, 25),
+        Preto = Color3.fromRGB(75, 75, 85),
+        Cinza = Color3.fromRGB(145, 145, 155),
+    }
+    local accent = colors[themeName]
+    if not accent then return end
+    local id = "Fantasma_" .. tostring(themeName)
+    UICustomization.Redz.Themes[id] = {
+        ["Color Hub 1"] = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, accent),
+            ColorSequenceKeypoint.new(0.48, Color3.fromRGB(5, 5, 8)),
+            ColorSequenceKeypoint.new(1, accent:Lerp(Color3.new(0, 0, 0), 0.55)),
+        }),
+        ["Color Hub 2"] = Color3.fromRGB(18, 18, 23),
+        ["Color Stroke"] = accent:Lerp(Color3.new(0, 0, 0), 0.35),
+        ["Color Theme"] = accent,
+        ["Color Text"] = Color3.fromRGB(245, 245, 245),
+        ["Color Dark Text"] = Color3.fromRGB(185, 185, 195),
+    }
+    local ok, err = pcall(function() UICustomization.Redz:SetTheme(id) end)
+    if not ok then warn("[UI Tema] " .. tostring(err)) end
+end
+
+-- ================== BIBLIOTECA DE AUDIOS SALVOS ==================
+local AudioLibrary = {
+    Entries = {},
+    Folder = "Fantasma1lHub",
+    File = "Fantasma1lHub/Audios.json",
+}
+
+function AudioLibrary.load()
+    if not (readfile and isfile) then return end
+    pcall(function()
+        if isfile(AudioLibrary.File) then
+            local decoded = HttpService:JSONDecode(readfile(AudioLibrary.File))
+            if type(decoded) == "table" then AudioLibrary.Entries = decoded end
+        end
+    end)
+end
+
+function AudioLibrary.saveFile()
+    if not writefile then return false end
+    return pcall(function()
+        if makefolder and not (isfolder and isfolder(AudioLibrary.Folder)) then makefolder(AudioLibrary.Folder) end
+        writefile(AudioLibrary.File, HttpService:JSONEncode(AudioLibrary.Entries))
+    end)
+end
+
+function AudioLibrary.names()
+    local names = {}
+    for name in pairs(AudioLibrary.Entries) do table.insert(names, name) end
+    table.sort(names)
+    if #names == 0 then table.insert(names, "Nenhum audio salvo") end
+    return names
+end
+
+function AudioLibrary.cleanName(name)
+    local cleaned = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return cleaned:sub(1, 40)
+end
+
+function AudioLibrary.add(name, id)
+    name = AudioLibrary.cleanName(name)
+    id = tostring(id or ""):match("%d+")
+    if name == "" or not id then return false, "Digite um nome e um ID valido." end
+    AudioLibrary.Entries[name] = id
+    AudioLibrary.saveFile()
+    return true, "Audio salvo na biblioteca."
+end
+
+function AudioLibrary.rename(oldName, newName)
+    newName = AudioLibrary.cleanName(newName)
+    if not AudioLibrary.Entries[oldName] or newName == "" then return false end
+    AudioLibrary.Entries[newName] = AudioLibrary.Entries[oldName]
+    if newName ~= oldName then AudioLibrary.Entries[oldName] = nil end
+    AudioLibrary.saveFile()
+    return true
+end
+
+function AudioLibrary.delete(name)
+    if not AudioLibrary.Entries[name] then return false end
+    AudioLibrary.Entries[name] = nil
+    AudioLibrary.saveFile()
+    return true
+end
+
+AudioLibrary.load()
+
 -- ================== REDZ LIBRARY ==================
 task.spawn(function()
     local redz = nil
@@ -1687,10 +2072,11 @@ task.spawn(function()
         notify("Erro Critico", "Falha ao carregar a biblioteca UI!")
         return
     end
+    UICustomization.Redz = redz
 
     local Window = redz:MakeWindow({
         Title = HUB_NAME,
-        SubTitle = "Brookhaven Edition v8.7.0 | " .. MY_ROLE,
+        SubTitle = "Brookhaven Edition v8.8.0 | " .. MY_ROLE,
         SaveFolder = "Fantasma1l_Brookhaven"
     })
 
@@ -1712,11 +2098,13 @@ task.spawn(function()
     local TabGamepass = Window:MakeTab({ "Free gamepass", "crown" })
     local TabProt = Window:MakeTab({ "Protecao", "shield" })
     local TabAudio = Window:MakeTab({ "Audio", "music" })
+    local TabVisuals = Window:MakeTab({ "Efeitos Visuais", "sparkles" })
+    local TabConfig = Window:MakeTab({ "Configuracao", "settings" })
 
     Window:SelectTab(TabHome)
 
     TabHome:AddSection({ "Informacoes" })
-    TabHome:AddParagraph({ "Bem-vindo", HUB_NAME .. " - Brookhaven v8.7.0" })
+    TabHome:AddParagraph({ "Bem-vindo", HUB_NAME .. " - Brookhaven v8.8.0" })
     TabHome:AddParagraph({ "Cargo Atribuído", MY_ROLE })
 
     TabHome:AddSection({ "Comunidade Discord" })
@@ -2141,36 +2529,76 @@ task.spawn(function()
 
     TabTroll:AddButton({ "KILL ALL (Todos no Servidor)", function()
         notify("Kill All", "A iniciar Kill All com " .. methodKill .. "!")
-
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then
-                task.spawn(function()
-                    executeMethodOnPlayer(player, methodKill)
-                end)
-                task.wait(0.2)
+        task.spawn(function()
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer then
+                    if methodKill == "Couch" then
+                        -- O Couch usa o personagem local: um alvo completo por vez.
+                        local ok, err = pcall(executeMethodOnPlayer, player, "Couch")
+                        if not ok then warn("Kill All Couch:", err) end
+                        task.wait(0.2)
+                    else
+                        task.spawn(function()
+                            executeMethodOnPlayer(player, methodKill)
+                        end)
+                        task.wait(0.2)
+                    end
+                end
             end
-        end
+            notify("Kill All", "Fila de alvos concluida.", 3)
+        end)
     end })
 
     TabTroll:AddButton({ "KILL PROP ALL (Todos os Props Simultaneos)", function()
         executeKillPropAll()
     end })
 
+    TabTroll:AddSection({ "FLING POR FORCA" })
+    TabTroll:AddSlider({
+        Name = "Forca do Fling",
+        Description = "Ajuste a velocidade aplicada ao metodo.",
+        Min = 50000,
+        Max = 1000000,
+        Default = 250000,
+        Callback = function(value)
+            ExtraHub.FlingPower = math.floor(tonumber(value) or 250000)
+        end
+    })
+    TabTroll:AddParagraph({
+        "Car / Ball / Boat / Couch",
+        "Use o alvo selecionado no topo da aba Troll. Car e Boat procuram um veiculo compativel proximo do alvo."
+    })
+    TabTroll:AddButton({ "FLING CAR", function()
+        ExtraHub.flingVehicleMethod("Car", findPlayer(getgenv().Target or selectedPlayerNameBH), ExtraHub.FlingPower)
+    end })
+    TabTroll:AddButton({ "FLING BALL", function()
+        local target = findPlayer(getgenv().Target or selectedPlayerNameBH)
+        if target then task.spawn(executeFlingBall, target, ExtraHub.FlingPower) end
+    end })
+    TabTroll:AddButton({ "FLING BOAT", function()
+        ExtraHub.flingVehicleMethod("Boat", findPlayer(getgenv().Target or selectedPlayerNameBH), ExtraHub.FlingPower)
+    end })
+    TabTroll:AddButton({ "FLING COUCH", function()
+        local target = findPlayer(getgenv().Target or selectedPlayerNameBH)
+        if target then task.spawn(ExtraHub.flingCouchAt, target, ExtraHub.FlingPower) end
+    end })
+
     TabTroll:AddSection({ "ADMIN" })
     TabTroll:AddParagraph({
         "Anti Tool",
-        "Le as tools do alvo e solicita as mesmas para sua mochila pela remote oficial PickingTools."
+        "Desequipa e bloqueia tools continuamente. Sem autoridade do servidor, a remocao e garantida apenas no seu cliente."
     })
-    TabTroll:AddButton({ "ANTI TOOL / PUXAR TODAS AS TOOLS DO ALVO", function()
-        local targetName = getgenv().Target or selectedPlayerNameBH
-        task.spawn(function() ExtraHub.copyTargetTools(targetName) end)
-    end })
     TabTroll:AddToggle({
-        Name = "Anti Tool Automatico (Copiar Novas Tools)",
+        Name = "Anti Tool (Alvo Selecionado)",
         Default = false,
         Callback = function(value)
-            ExtraHub.setAutoTools(value, getgenv().Target or selectedPlayerNameBH)
+            ExtraHub.setAntiTool(value, getgenv().Target or selectedPlayerNameBH)
         end
+    })
+    TabTroll:AddToggle({
+        Name = "Anti Tool All",
+        Default = false,
+        Callback = function(value) ExtraHub.setAntiToolAll(value) end
     })
 
     -- ================== PROTECAO ==================
@@ -2276,34 +2704,179 @@ task.spawn(function()
 
     -- ================== AUDIO ==================
     TabAudio:AddSection({ "Boombox" })
+    TabAudio:AddParagraph({
+        "Audio compartilhado",
+        "O som usa a remote oficial 1BoomBox. Para outras pessoas ouvirem, o Boombox precisa estar equipado e o servidor/gamepass precisa permitir."
+    })
     local customAudioId = ""
+    local customAudioName = ""
+    local selectedAudioName = AudioLibrary.names()[1]
+    local renameAudioName = ""
+
+    local function playBoomboxAudio(rawId, shared)
+        local id = tonumber(tostring(rawId or ""):match("%d+") or "")
+        if not id then
+            notify("Audio", "Coloque um ID valido.", 3)
+            return
+        end
+        task.spawn(function()
+            if shared then ExtraHub.requestTool("Boombox") end
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            local boomboxTool = (character and character:FindFirstChild("Boombox"))
+                or (backpack and backpack:FindFirstChild("Boombox"))
+            if boomboxTool and humanoid and boomboxTool.Parent ~= character then
+                pcall(function() humanoid:EquipTool(boomboxTool) end)
+                task.wait(0.35)
+            end
+            local ok, err = pcall(function()
+                local re = ReplicatedStorage:FindFirstChild("RE")
+                local boombox = re and re:FindFirstChild("1BoomBox")
+                if not boombox then error("Remote 1BoomBox nao encontrada.") end
+                boombox:InvokeServer(id)
+            end)
+            if ok then
+                notify("Audio", shared and "ID enviado ao Boombox; a reproducao para todos depende do servidor/gamepass." or "ID enviado ao Boombox.", 4)
+            else
+                notify("Audio", "O servidor recusou ou nao liberou o Boombox: " .. tostring(err), 5)
+            end
+        end)
+    end
 
     TabAudio:AddTextBox({
         Name = "ID da Musica",
         Default = "",
         PlaceholderText = "1848354536",
-        Callback = function(value)
-            customAudioId = value
+        Callback = function(value) customAudioId = value end
+    })
+    TabAudio:AddTextBox({
+        Name = "Nome para Salvar",
+        Default = "",
+        PlaceholderText = "Minha musica",
+        Callback = function(value) customAudioName = value end
+    })
+    TabAudio:AddButton({ "Tocar no Boombox", function()
+        playBoomboxAudio(customAudioId, false)
+    end })
+    TabAudio:AddButton({ "AUDIO ALL (Boombox / Gamepass)", function()
+        playBoomboxAudio(customAudioId, true)
+    end })
+
+    TabAudio:AddSection({ "Pasta de Audios" })
+    TabAudio:AddParagraph({
+        "Biblioteca persistente",
+        "Salve IDs com nomes, renomeie ou exclua. Os dados ficam em Fantasma1lHub/Audios.json quando o executor permite arquivos."
+    })
+    local AudioDropdown = TabAudio:AddDropdown({
+        Name = "Audios Salvos",
+        Options = AudioLibrary.names(),
+        Default = selectedAudioName,
+        Callback = function(value) selectedAudioName = value end
+    })
+    local function refreshAudios()
+        local names = AudioLibrary.names()
+        selectedAudioName = names[1]
+        pcall(function() AudioDropdown:Set(names) end)
+    end
+    TabAudio:AddButton({ "Salvar Audio na Pasta", function()
+        local ok, message = AudioLibrary.add(customAudioName, customAudioId)
+        notify("Pasta de Audios", message, 3)
+        if ok then refreshAudios() end
+    end })
+    TabAudio:AddButton({ "Tocar Audio Salvo", function()
+        local id = AudioLibrary.Entries[selectedAudioName]
+        if id then playBoomboxAudio(id, true) else notify("Pasta de Audios", "Selecione um audio salvo.", 3) end
+    end })
+    TabAudio:AddTextBox({
+        Name = "Novo Nome do Audio",
+        Default = "",
+        PlaceholderText = "Nome renomeado",
+        Callback = function(value) renameAudioName = value end
+    })
+    TabAudio:AddButton({ "Renomear Audio Selecionado", function()
+        if AudioLibrary.rename(selectedAudioName, renameAudioName) then
+            notify("Pasta de Audios", "Audio renomeado e salvo.", 3)
+            refreshAudios()
+        else
+            notify("Pasta de Audios", "Selecione um audio e digite um novo nome.", 3)
         end
+    end })
+    TabAudio:AddButton({ "Excluir Audio Selecionado", function()
+        if AudioLibrary.delete(selectedAudioName) then
+            notify("Pasta de Audios", "Audio excluido.", 3)
+            refreshAudios()
+        else
+            notify("Pasta de Audios", "Nenhum audio valido selecionado.", 3)
+        end
+    end })
+    TabAudio:AddButton({ "Atualizar Pasta", refreshAudios })
+
+    TabAudio:AddSection({ "Gamepass de Som" })
+    TabAudio:AddParagraph({
+        "Requisito do Brookhaven",
+        "Audio All nao contorna compras: so toca para todos quando o Boombox e a reproducao compartilhada forem aceitos pelo servidor. Sem o gamepass ou permissao, o ID pode funcionar apenas localmente ou ser recusado."
     })
 
-    TabAudio:AddButton({ "Tocar no Boombox", function()
-        local id = tonumber(customAudioId)
-        if not id then
-            notify("Erro", "Coloque um ID valido.")
-            return
-        end
-
-        pcall(function()
-            local re = ReplicatedStorage:FindFirstChild("RE")
-            local boombox = re and re:FindFirstChild("1BoomBox")
-            if boombox then
-                boombox:InvokeServer(id)
-            else
-                notify("Erro", "Boombox nao encontrado.")
-            end
-        end)
+    -- ================== CONFIGURACAO / TEMAS ==================
+    TabConfig:AddSection({ "Cores do Hub" })
+    TabConfig:AddDropdown({
+        Name = "Cor com Degrade de Preto",
+        Options = { "Vermelho", "Azul", "Amarelo", "Preto", "Cinza" },
+        Default = "Preto",
+        Callback = function(value) UICustomization.applyTheme(value) end
+    })
+    TabConfig:AddSection({ "Fundo da Janela" })
+    local function backgroundId(name)
+        local ids = {
+            ["Fundo 1"] = "123754864736277",
+            ["Fundo 2"] = "121502907054918",
+            ["Janelas"] = "81149055236435",
+        }
+        return ids[name]
+    end
+    TabConfig:AddDropdown({
+        Name = "Fundos",
+        Options = { "Fundo 1", "Fundo 2", "Janelas" },
+        Default = "Fundo 1",
+        Callback = function(value) UICustomization.setBackground(backgroundId(value)) end
+    })
+    TabConfig:AddSlider({
+        Name = "Transparencia do Fundo", Min = 0, Max = 95, Default = 35,
+        Callback = function(value) UICustomization.setBackgroundTransparency((tonumber(value) or 35) / 100) end
+    })
+    TabConfig:AddButton({ "Remover Fundo", function() UICustomization.setBackground("") end })
+    TabConfig:AddButton({ "Icone no Nome do Painel", function()
+        UICustomization.setTitleIcon("81149055236435")
     end })
+
+    -- ================== EFEITOS VISUAIS ==================
+    TabVisuals:AddSection({ "Moldura da Bola / Janela Redz" })
+    TabVisuals:AddDropdown({
+        Name = "Efeito ao Redor",
+        Options = { "Nenhum", "Kamui Roxo", "Efeito Azul" },
+        Default = "Nenhum",
+        Callback = function(value)
+            local ids = { ["Kamui Roxo"] = "110456504694881", ["Efeito Azul"] = "135653661483044" }
+            UICustomization.setEffect(ids[value])
+        end
+    })
+    TabVisuals:AddButton({ "Efeito Kamui ao Redor", function()
+        UICustomization.setEffect("110456504694881")
+    end })
+    TabVisuals:AddButton({ "Efeito Alternativo ao Redor", function()
+        UICustomization.setEffect("135653661483044")
+    end })
+    TabVisuals:AddButton({ "Desativar Efeito", function() UICustomization.setEffect("") end })
+    TabVisuals:AddSection({ "Fundos" })
+    TabVisuals:AddButton({ "Aplicar Fundo 1", function() UICustomization.setBackground("123754864736277") end })
+    TabVisuals:AddButton({ "Aplicar Fundo 2", function() UICustomization.setBackground("121502907054918") end })
+    TabVisuals:AddButton({ "Imagem no Canto Superior Esquerdo", function()
+        UICustomization.setTitleIcon("81149055236435")
+    end })
+    task.delay(1, function()
+        pcall(UICustomization.setTitleIcon, "81149055236435")
+    end)
 
     -- ================== VEHICLES ==================
     TabVehicles:AddSection({ "Carros do Servidor" })
@@ -2530,8 +3103,8 @@ task.spawn(function()
     -- ================== FREE GAMEPASS ==================
     TabGamepass:AddSection({ "Recursos de Gamepass" })
     TabGamepass:AddParagraph({
-        "Sem desbloqueio falso",
-        "O hub nao altera compras nem inventa remotes. Estas acoes usam PickingTools/PickingCar; o servidor pode exigir o passe."
+        "BETA - NAO FUNCIONA COMO DESBLOQUEIO REAL",
+        "Esta aba esta em testes e nao desbloqueia gamepasses. O hub nao altera compras; o servidor pode recusar ferramentas, veiculos e sons que exigem passe."
     })
     TabGamepass:AddButton({ "Solicitar Todas as Ferramentas", function() ExtraHub.giveAllTools() end })
     TabGamepass:AddDropdown({
@@ -2544,5 +3117,5 @@ task.spawn(function()
         task.spawn(ExtraHub.spawnVehicle, ExtraHub.PremiumVehicle or "Limo")
     end })
 
-    notify(HUB_NAME, "Brookhaven Edition v8.7.0 carregado com sucesso!")
+    notify(HUB_NAME, "Brookhaven Edition v8.8.0 carregado com sucesso!")
 end)
