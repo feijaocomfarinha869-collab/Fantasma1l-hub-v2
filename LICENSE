@@ -1,6 +1,6 @@
 --[[
     ==========================================================
-    FANTASMA1L HUB - COMPLETO UNIFICADO v49
+    FANTASMA1L HUB - COMPLETO UNIFICADO v50
     (+ LOCUST COM REDE | POOLROOMS | PREFIXO ; | TORNADO EF5
      | IMAGENS CORRIGIDAS | EXPANSAO DE DOMINIO DO GOJO)
     ==========================================================
@@ -4511,6 +4511,162 @@ local function runBroadcast(action, senderName, targetName)
     end
 end
 
+-- ================== SUKUNA: CORTES (CLEAVE) + CENÁRIO SOMBRIO (usados no domínio e no choque) ==================
+SHRINE_YAW = 0   -- ajuste da direção do santuário (0/90/180/270) — também no painel > Configuração
+CLEAVE_LOW = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- corte do Sukuna: núcleo branco/prateado + rastro preto + brilho vermelho, risca o ar e deixa rastro
+function cleaveLine(parent, a, b, w, life)
+    life = life or 0.4
+    local TSv = game:GetService("TweenService")
+    local DBv = game:GetService("Debris")
+    local holder = Instance.new("Part")
+    holder.Anchored, holder.CanCollide, holder.CanQuery, holder.CanTouch, holder.CastShadow = true, false, false, false, false
+    holder.Transparency = 1
+    holder.Size = Vector3.new(0.2, 0.2, 0.2)
+    holder.CFrame = CFrame.new(a)
+    holder.Parent = parent
+    local function att(pos)
+        local at = Instance.new("Attachment")
+        at.Parent = holder
+        at.WorldPosition = pos
+        return at
+    end
+    local a0, am, a1 = att(a), att(a), att(a)
+    local beams = {}
+    local function bm(x0, x1, w0, w1, color, emis, tr)
+        local m = Instance.new("Beam")
+        m.Attachment0, m.Attachment1 = x0, x1
+        m.Width0, m.Width1 = w0, w1
+        m.FaceCamera, m.Segments = true, 1
+        m.Color = ColorSequence.new(color)
+        m.Transparency = NumberSequence.new(tr)
+        m.LightEmission, m.LightInfluence = emis, 0
+        m.Parent = holder
+        beams[#beams + 1] = m
+    end
+    local RED, BLK, WHT = Color3.fromRGB(235, 0, 12), Color3.new(0, 0, 0), Color3.fromRGB(245, 248, 255)
+    bm(a0, am, 0, w * 4, RED, 1, 0.6)
+    bm(am, a1, w * 4, 0, RED, 1, 0.6)
+    bm(a0, am, 0, w * 2.2, BLK, 0, 0.05)
+    bm(am, a1, w * 2.2, 0, BLK, 0, 0.05)
+    bm(a0, am, 0, w, WHT, 1, 0)
+    bm(am, a1, w, 0, WHT, 1, 0)
+    local trail
+    if not CLEAVE_LOW then
+        trail = Instance.new("Beam")
+        trail.Attachment0, trail.Attachment1 = a0, a1
+        trail.Width0, trail.Width1 = w * 0.5, w * 0.5
+        trail.FaceCamera, trail.Segments = true, 1
+        trail.Color = ColorSequence.new(Color3.fromRGB(150, 0, 10))
+        trail.Transparency = NumberSequence.new(0.4)
+        trail.LightEmission, trail.LightInfluence = 0, 0
+        trail.Parent = holder
+    end
+    DBv:AddItem(holder, life + 1.6)
+    task.spawn(function()
+        pcall(function()
+            for i = 1, 5 do
+                local p1 = a + (b - a) * (i / 5)
+                a1.WorldPosition = p1
+                am.WorldPosition = (a + p1) / 2
+                RunService.Heartbeat:Wait()
+            end
+            -- faíscas no fim do corte
+            local sp = Instance.new("Part")
+            sp.Anchored, sp.CanCollide, sp.CanQuery, sp.CanTouch, sp.CastShadow = true, false, false, false, false
+            sp.Transparency = 1
+            sp.Size = Vector3.new(0.2, 0.2, 0.2)
+            sp.Position = b
+            sp.Parent = parent
+            local e = Instance.new("ParticleEmitter")
+            e.Rate = 0
+            e.Lifetime = NumberRange.new(0.3, 0.7)
+            e.Speed = NumberRange.new(10, 35)
+            e.SpreadAngle = Vector2.new(180, 180)
+            e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.8), NumberSequenceKeypoint.new(1, 0) })
+            e.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(255, 30, 30))
+            e.LightEmission, e.LightInfluence = 1, 0
+            e.Parent = sp
+            e:Emit(CLEAVE_LOW and 4 or 10)
+            DBv:AddItem(sp, 1)
+            for _, m in ipairs(beams) do
+                TSv:Create(m, TweenInfo.new(life, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Width0 = 0, Width1 = 0 }):Play()
+            end
+            if trail then
+                TSv:Create(trail, TweenInfo.new(life + 0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Width0 = 0, Width1 = 0 }):Play()
+            end
+        end)
+    end)
+end
+
+-- cenário do Santuário Malevolente: chão rachado brilhando, entulho, pilares e montanhas cortados ao meio
+function buildSukunaScenery(parent, center, halfX, halfZ, count, avoid)
+    avoid = avoid or 0
+    local function mk(size, cf, color, mat, transp)
+        local p = Instance.new("Part")
+        p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, true
+        p.Size, p.CFrame, p.Color = size, cf, color
+        p.Material = mat or Enum.Material.Slate
+        p.Transparency = transp or 0
+        p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+        p.Parent = parent
+        return p
+    end
+    local function rpos()
+        local pos
+        for _ = 1, 8 do
+            pos = center + Vector3.new((math.random() * 2 - 1) * halfX, 0, (math.random() * 2 - 1) * halfZ)
+            if (Vector3.new(pos.X - center.X, 0, pos.Z - center.Z)).Magnitude >= avoid then break end
+        end
+        return pos
+    end
+    local ROCK, ROCK2 = Color3.fromRGB(34, 28, 30), Color3.fromRGB(22, 18, 20)
+    local GLOW = Color3.fromRGB(255, 25, 25)
+
+    -- rachaduras brilhando no chão
+    for _ = 1, count * 5 do
+        local p = rpos()
+        local c = mk(Vector3.new(0.5 + math.random() * 0.8, 0.15, 18 + math.random() * 60),
+            CFrame.new(p + Vector3.new(0, 0.12, 0)) * CFrame.Angles(0, math.random() * math.pi, 0), GLOW, Enum.Material.Neon, 0.1)
+        c.CastShadow = false
+    end
+    -- entulho espalhado
+    for _ = 1, count * 12 do
+        local p = rpos()
+        local s = 0.8 + math.random() * 4
+        mk(Vector3.new(s * (0.6 + math.random()), s * (0.4 + math.random() * 0.8), s * (0.6 + math.random())),
+            CFrame.new(p + Vector3.new(0, s * 0.3, 0)) * CFrame.Angles(math.random() * 0.8, math.random() * 6.28, math.random() * 0.8),
+            (math.random() < 0.5) and ROCK or ROCK2)
+    end
+    -- bloco cortado ao meio (parte de cima desliza), com a linha do corte brilhando
+    local function sliced(p, w, h, d)
+        local base = CFrame.new(p) * CFrame.Angles(0, math.random() * math.pi, 0)
+        local cutH = h * (0.35 + math.random() * 0.3)
+        mk(Vector3.new(w, cutH, d), base * CFrame.new(0, cutH / 2, 0), ROCK)
+        local slide = (math.random() < 0.5 and 1 or -1) * (w * 0.06 + math.random() * 4)
+        mk(Vector3.new(w * 0.97, h - cutH, d * 0.97),
+            base * CFrame.new(slide, cutH + (h - cutH) / 2 + 1.5, slide * 0.4) * CFrame.Angles(0, 0, math.rad(slide * 0.8)), ROCK)
+        local g = mk(Vector3.new(w * 1.02, 0.35, d * 1.02), base * CFrame.new(0, cutH + 0.2, 0), GLOW, Enum.Material.Neon, 0.1)
+        g.CastShadow = false
+    end
+    for _ = 1, count do
+        sliced(rpos(), 12 + math.random() * 16, 40 + math.random() * 70, 12 + math.random() * 16)
+    end
+    -- montanhas cortadas ao fundo
+    for _ = 1, 3 do
+        local ang = math.random() * math.pi * 2
+        local p = center + Vector3.new(math.cos(ang) * halfX * 0.9, 0, math.sin(ang) * halfZ * 0.9)
+        sliced(p, 90 + math.random() * 60, 110 + math.random() * 80, 90 + math.random() * 60)
+    end
+    -- pedaços de terra flutuando
+    for _ = 1, count * 2 do
+        local p = rpos() + Vector3.new(0, 15 + math.random() * 55, 0)
+        local s = 2 + math.random() * 7
+        mk(Vector3.new(s * 1.3, s * 0.7, s), CFrame.new(p) * CFrame.Angles(math.random() * 6, math.random() * 6, math.random() * 6), ROCK2)
+    end
+end
+
 SUKUNA_BUSY, SUKUNA_ABORT, SUKUNA_CASTER = false, false, nil
 DOMAIN_BATTLE = { active = false, token = 0, count = 0 }
 
@@ -4709,7 +4865,7 @@ do
             local len = 60 + math.random() * 150
             local thin = math.random() < 0.45
             local w = thin and (0.25 + math.random() * 0.3) or (2 + math.random() * 3.5)
-            beamLine(base - d * len / 2, base + d * len / 2, w, Color3.new(1, 1, 1), Color3.new(0, 0, 0), 0.3)
+            cleaveLine(folder, base - d * len / 2, base + d * len / 2, thin and 0.35 or (1.2 + math.random() * 1.6), 0.45)
         end
 
         -- riscos finos vermelhos/roxos na borda esquerda (como na referência)
@@ -4868,8 +5024,8 @@ do
                 sky.Parent = Lighting
 
                 local function setL(k, v) pcall(function() Lighting[k] = v end) end
-                setL("Ambient", Color3.fromRGB(60, 18, 70))
-                setL("OutdoorAmbient", Color3.fromRGB(40, 8, 50))
+                setL("Ambient", Color3.fromRGB(40, 10, 48))
+                setL("OutdoorAmbient", Color3.fromRGB(25, 5, 35))
                 setL("Brightness", 0.3)
                 setL("ClockTime", 0)
                 setL("FogColor", Color3.fromRGB(16, 0, 26))
@@ -4924,18 +5080,21 @@ do
                     ColorSequenceKeypoint.new(0.5, Color3.fromRGB(30, 80, 115)),
                     ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 30, 55)) })
 
-                -- lado vermelho: manchas vermelhas, vinho e pretas por toda parte
-                for _ = 1, (LOWFX and 8 or 14) do
-                    local pos = C + Vector3.new(-190 + math.random() * 182, 5 + math.random() * 110, -180 + math.random() * 220)
-                    puff(pos, redBright, smokesRed, 0, 70, 140, 1.6, 0.12)
-                    puff(pos, redDark,   smokesRed, 0, 80, 160, 1.6, 0.15)
-                    puff(pos, redBlack,  smokesRed, 0, 60, 130, 1.0, 0.10)
+                -- lado vermelho SOMBRIO: nuvens densas escuras e névoa baixa (sem fumaça vermelha viva)
+                local mistRed = ColorSequence.new(Color3.fromRGB(70, 0, 6), Color3.fromRGB(25, 0, 3))
+                local cloudBlack = ColorSequence.new(Color3.fromRGB(10, 2, 4), Color3.fromRGB(28, 4, 8))
+                for _ = 1, (LOWFX and 6 or 10) do
+                    local pos = C + Vector3.new(-190 + math.random() * 182, 150 + math.random() * 110, -190 + math.random() * 230)
+                    puff(pos, cloudBlack, smokesRed, 0, 120, 240, 1.4, 0.35)
+                    puff(pos, mistRed, smokesRed, 0.05, 110, 220, 1.0, 0.5)
                 end
-                -- clarão vermelho forte atrás do santuário
-                for _ = 1, 5 do
-                    puff(C + Vector3.new(-105 + math.random() * 40, 35 + math.random() * 40, -150 + math.random() * 30),
-                        redGlow, smokesRed, 0.5, 120, 220, 2, 0.1)
+                for _ = 1, (LOWFX and 4 or 7) do
+                    puff(C + Vector3.new(-190 + math.random() * 182, 4 + math.random() * 18, -180 + math.random() * 210),
+                        mistRed, smokesRed, 0, 90, 170, 1.0, 0.65)
                 end
+                local moon = part(folder, Vector3.new(90, 90, 90), CFrame.new(C + Vector3.new(-110, 230, -170)),
+                    Color3.fromRGB(150, 0, 10), Enum.Material.Neon, 0.1, Enum.PartType.Ball)
+                moon.CastShadow = false
 
                 -- lado azul: o mesmo cosmos do domínio normal do Gojo
                 for i = 1, (LOWFX and 7 or 12) do
@@ -4991,7 +5150,7 @@ do
                     local fp = part(folder, Vector3.new(4, 4, 4), CFrame.new(C + Vector3.new(-170 + math.random() * 150, 2 + math.random() * 30, -160 + math.random() * 190)), Color3.new(1, 1, 1), nil, 1)
                     local fe = Instance.new("ParticleEmitter")
                     fe.Texture = "rbxasset://textures/particles/fire_main.dds"
-                    fe.Rate = LOWFX and 6 or 12
+                    fe.Rate = LOWFX and 3 or 6
                     fe.Lifetime = NumberRange.new(1, 2)
                     fe.Speed = NumberRange.new(6, 16)
                     fe.SpreadAngle = Vector2.new(25, 25)
@@ -5000,7 +5159,7 @@ do
                     fe.Rotation = NumberRange.new(0, 360)
                     fe.RotSpeed = NumberRange.new(-60, 60)
                     fe.LightEmission, fe.LightInfluence = 1, 0
-                    fe.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 14), NumberSequenceKeypoint.new(1, 0) })
+                    fe.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 7), NumberSequenceKeypoint.new(1, 0) })
                     fe.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1) })
                     fe.Color = ColorSequence.new({
                         ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 190, 80)),
@@ -5011,7 +5170,8 @@ do
                 end
 
                 -- domo vermelho enorme na borda esquerda (domínio do Sukuna visto de longe)
-                dome = part(folder, Vector3.new(300, 300, 300), CFrame.new(C + Vector3.new(-250, 60, -50)), Color3.fromRGB(190, 0, 12), Enum.Material.Neon, 0.1, Enum.PartType.Ball)
+                dome = part(folder, Vector3.new(300, 300, 300), CFrame.new(C + Vector3.new(-250, 60, -50)), Color3.fromRGB(95, 0, 8), Enum.Material.Neon, 0.1, Enum.PartType.Ball)
+                buildSukunaScenery(folder, C + Vector3.new(-85, 0, -115), 70, 75, LOWFX and 3 or 6, 0)
 
                 -- linhas de velocidade vermelhas/azuis saindo do buraco negro
                 local holeC = C + Vector3.new(80, 45, -140)
@@ -5045,7 +5205,7 @@ do
                 for _, zz in ipairs({ -170, -120, -70, -20, 30 }) do
                     for _, yy in ipairs({ 20, 60, 100 }) do
                         if not LOWFX or ((zz + yy) % 100 == 0) then
-                            local hr = puff(C + Vector3.new(-8, yy, zz), redBright, smokesRed, 0.1, 40, 90, 1.2, 0.2)
+                            local hr = puff(C + Vector3.new(-8, yy, zz), mistRed, smokesRed, 0.05, 40, 90, 1.0, 0.45)
                             local hb = puff(C + Vector3.new(8, yy, zz), tealSeq, smokesBlue, 0.35, 40, 90, 1.2, 0.3)
                             barrier[#barrier + 1] = { part = hr, dx = -8, y = yy, z = zz }
                             barrier[#barrier + 1] = { part = hb, dx = 8, y = yy, z = zz }
@@ -5065,7 +5225,8 @@ do
                     end
                     local bcf, bs = sm:GetBoundingBox()
                     local bo = sm:GetPivot().Position.Y - (bcf.Position.Y - bs.Y / 2)
-                    local tcf = CFrame.new(C.X - 85, C.Y + bo + SHRINE_Y, C.Z - 150) * CFrame.Angles(0, math.pi, 0)
+                    local tcf = CFrame.new(C.X - 85, C.Y + bo + SHRINE_Y, C.Z - 150)
+                        * CFrame.lookAt(Vector3.zero, Vector3.new(0, 0, 1)).Rotation * CFrame.Angles(0, math.rad(SHRINE_YAW), 0)
                     local scf = tcf * CFrame.new(0, -40, 0)
                     sm:PivotTo(scf)
                     for i = 1, 50 do
@@ -5121,7 +5282,7 @@ do
                     while alive() and gui and gui.Parent do
                         if arenaOn then
                             if redOn then
-                                for _ = 1, (LOWFX and 1 or 3) do slashRed() end
+                                for _ = 1, (LOWFX and 1 or 2) do slashRed() end
                                 if math.random() < 0.7 then edgeStreak() end
                             end
                             if blueOn then for _ = 1, (LOWFX and 1 or 2) do streakBlue() end end
@@ -5374,6 +5535,61 @@ local function runSukunaDomain(senderName)
         end
     end
 
+    -- ===== CENÁRIO SOMBRIO: chão destruído, ruínas cortadas, nuvens densas, lua vermelha, brasas =====
+    do
+        local LOWS = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+        buildSukunaScenery(folder, Vector3.new(cx, gy, cz), 190, 190, LOWS and 6 or 12, 32)
+        local topY = cy + half
+        local function cloudAt(pos, c1, c2, tr)
+            local cp = boxPart(Vector3.new(4, 4, 4), pos, Color3.new(1, 1, 1), 1)
+            local e = Instance.new("ParticleEmitter")
+            e.Texture = "rbxasset://textures/particles/smoke_main.dds"
+            e.Rate = LOWS and 1 or 1.6
+            e.Lifetime = NumberRange.new(9, 14)
+            e.Speed = NumberRange.new(2, 6)
+            e.SpreadAngle = Vector2.new(180, 180)
+            e.Rotation = NumberRange.new(0, 360)
+            e.RotSpeed = NumberRange.new(-6, 6)
+            e.Drag = 0.5
+            e.LightEmission, e.LightInfluence = 0.03, 0
+            e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 180), NumberSequenceKeypoint.new(1, 340) })
+            e.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.2, tr),
+                NumberSequenceKeypoint.new(0.8, math.min(tr + 0.1, 1)), NumberSequenceKeypoint.new(1, 1) })
+            e.Color = ColorSequence.new(c1, c2)
+            e.Parent = cp
+        end
+        for _ = 1, (LOWS and 7 or 12) do
+            local pos = Vector3.new(cx + (math.random() - 0.5) * 420, topY - 40 - math.random() * 70, cz + (math.random() - 0.5) * 420)
+            cloudAt(pos, Color3.fromRGB(10, 2, 4), Color3.fromRGB(32, 4, 8), 0.35)
+            cloudAt(pos, Color3.fromRGB(80, 0, 8), Color3.fromRGB(30, 0, 4), 0.55)
+        end
+        local moon = boxPart(Vector3.new(130, 130, 130), Vector3.new(cx + 110, topY - 100, cz - 170), Color3.fromRGB(140, 0, 8), 0.1, true)
+        moon.Shape = Enum.PartType.Ball
+        -- luzes vermelhas baixas pra iluminar as ruínas
+        for _, o in ipairs({ Vector3.new(60, 22, 60), Vector3.new(-60, 22, 60), Vector3.new(60, 22, -60), Vector3.new(-60, 22, -60) }) do
+            local lp = boxPart(Vector3.new(1, 1, 1), Vector3.new(cx, gy, cz) + o, Color3.new(1, 1, 1), 1)
+            local pl = Instance.new("PointLight")
+            pl.Color, pl.Range, pl.Brightness = Color3.fromRGB(255, 20, 20), 60, 3
+            pl.Parent = lp
+        end
+        -- brasas subindo
+        local ep = boxPart(Vector3.new(380, 120, 380), Vector3.new(cx, gy + 60, cz), Color3.new(1, 1, 1), 1)
+        local em = Instance.new("ParticleEmitter")
+        pcall(function()
+            em.Shape = Enum.ParticleEmitterShape.Box
+            em.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+        end)
+        em.Rate = LOWS and 25 or 60
+        em.Lifetime = NumberRange.new(4, 7)
+        em.Speed = NumberRange.new(3, 9)
+        em.Acceleration = Vector3.new(0, 5, 0)
+        em.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0) })
+        em.Color = ColorSequence.new(Color3.fromRGB(255, 120, 60), Color3.fromRGB(200, 0, 0))
+        em.LightEmission, em.LightInfluence = 1, 0
+        em.Parent = ep
+    end
+
     -- ===== ILUMINAÇÃO VERMELHA / ESCURA =====
     local saved, hidden = {}, {}
     for _, k in ipairs({ "Ambient", "OutdoorAmbient", "Brightness", "ClockTime", "FogColor", "FogStart", "FogEnd", "ExposureCompensation" }) do
@@ -5385,24 +5601,24 @@ local function runSukunaDomain(senderName)
         end
     end)
     local function setL(k, v) pcall(function() Lighting[k] = v end) end
-    setL("Ambient", Color3.fromRGB(70, 0, 0))
-    setL("OutdoorAmbient", Color3.fromRGB(50, 0, 0))
-    setL("Brightness", 0.6)
+    setL("Ambient", Color3.fromRGB(32, 0, 2))
+    setL("OutdoorAmbient", Color3.fromRGB(22, 0, 2))
+    setL("Brightness", 0.25)
     setL("ClockTime", 0)
-    setL("FogColor", Color3.fromRGB(25, 0, 0))
-    setL("FogStart", 20)
-    setL("FogEnd", 450)
-    setL("ExposureCompensation", -0.3)
+    setL("FogColor", Color3.fromRGB(12, 0, 2))
+    setL("FogStart", 10)
+    setL("FogEnd", 380)
+    setL("ExposureCompensation", -0.5)
 
     local cc = Instance.new("ColorCorrectionEffect")
     cc.Name = "SukunaCC"
-    cc.TintColor = Color3.fromRGB(255, 120, 120)
-    cc.Saturation, cc.Contrast, cc.Brightness = 0.1, 0.25, -0.05
+    cc.TintColor = Color3.fromRGB(255, 140, 140)
+    cc.Saturation, cc.Contrast, cc.Brightness = 0, 0.35, -0.08
     cc.Parent = Lighting
     local atm = Instance.new("Atmosphere")
     atm.Name = "SukunaAtmosphere"
-    atm.Color, atm.Decay = Color3.fromRGB(120, 0, 0), Color3.fromRGB(40, 0, 0)
-    atm.Density, atm.Haze, atm.Offset = 0.35, 1.5, 0
+    atm.Color, atm.Decay = Color3.fromRGB(80, 0, 0), Color3.fromRGB(20, 0, 0)
+    atm.Density, atm.Haze, atm.Offset = 0.45, 2.2, 0
     atm.Parent = Lighting
 
     -- ===== TREMOR DE CÂMERA + FLASH VERMELHO =====
@@ -5437,25 +5653,7 @@ local function runSukunaDomain(senderName)
 
     -- ===== CORTES VERMELHOS =====
     local function slash(pos, dir, len, thick)
-        local cf = CFrame.lookAt(pos, pos + dir)
-        local function mkPart(size, color, transp)
-            local p = Instance.new("Part")
-            p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
-            p.Material = Enum.Material.Neon
-            p.Color = color
-            p.Transparency = transp
-            p.Size = size
-            p.CFrame = cf
-            p.Parent = folder
-            return p
-        end
-        local core = mkPart(Vector3.new(thick * 0.4, thick * 0.4, len), Color3.fromRGB(255, 45, 45), 0)
-        local glow = mkPart(Vector3.new(thick * 1.6, thick * 1.6, len), Color3.fromRGB(170, 0, 0), 0.5)
-        local ti = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-        TweenService:Create(core, ti, { Transparency = 1, Size = Vector3.new(0.02, 0.02, len * 1.1) }):Play()
-        TweenService:Create(glow, ti, { Transparency = 1, Size = Vector3.new(0.05, 0.05, len * 1.1) }):Play()
-        Debris:AddItem(core, 0.3)
-        Debris:AddItem(glow, 0.3)
+        cleaveLine(folder, pos - dir * (len / 2), pos + dir * (len / 2), math.max(thick * 1.1, 0.5), 0.4)
     end
 
     local function bloodBurst(pos)
@@ -5490,14 +5688,18 @@ local function runSukunaDomain(senderName)
     local shrine = fetchAssetAsModel(SUK_SHRINE)
     if shrine then
         shrine.Parent = folder
-        pcall(function() shrine:ScaleTo(5.5) end)
+        pcall(function() shrine:ScaleTo(7) end)
         for _, p in ipairs(shrine:GetDescendants()) do
             if p:IsA("BasePart") then p.Anchored, p.CanCollide = true, false end
         end
-        local tb = sh.CFrame * CFrame.new(0, 0, 10)
+        -- santuário reto, 55 studs à frente de quem lançou, virado pra ele
+        local lk = Vector3.new(sh.CFrame.LookVector.X, 0, sh.CFrame.LookVector.Z)
+        lk = lk.Magnitude > 0.1 and lk.Unit or Vector3.new(0, 0, -1)
+        local tpos = sh.Position + lk * 55
         local bcf, bs = shrine:GetBoundingBox()
         local bo = shrine:GetPivot().Position.Y - (bcf.Position.Y - (bs.Y / 2))
-        local tcf = CFrame.new(tb.X, gy + bo + SHRINE_Y, tb.Z) * sh.CFrame.Rotation
+        local tcf = CFrame.new(tpos.X, gy + bo + SHRINE_Y, tpos.Z)
+            * CFrame.lookAt(Vector3.zero, -lk).Rotation * CFrame.Angles(0, math.rad(SHRINE_YAW), 0)
         local scf = tcf * CFrame.new(0, -35, 0)
         shrine:PivotTo(scf)
         for i = 1, 50 do
@@ -6902,7 +7104,7 @@ if not ok or not WindUI then
     notify("Erro", "Falha ao carregar WindUI.")
 else
     local HUB_NAME   = "Fantasma1l hub"
-    local HUB_VER    = "FANTASMA1L HUB | Administrator Version | V1.27"
+    local HUB_VER    = "FANTASMA1L HUB | Administrator Version | V1.28"
     local HUB_AUTHOR = "By Fantasma1l / renegado6661l"
 
     -- chama método do WindUI tentando as duas assinaturas (obj:método e obj.método)
@@ -7367,6 +7569,17 @@ else
         Callback = function(v)
             bgTransparency = tonumber(v) or 0.6
             if bgLabel and bgLabel.Parent then bgLabel.ImageTransparency = bgTransparency end
+        end,
+    })
+
+    TabCfg:Section({ Title = "Santuário do Sukuna", Icon = "landmark" })
+    TabCfg:Dropdown({
+        Title  = "Direção do santuário",
+        Desc   = "Se o santuário aparecer de lado ou de costas, troque aqui",
+        Values = { "0°", "90°", "180°", "270°" },
+        Value  = "0°",
+        Callback = function(v)
+            SHRINE_YAW = tonumber(tostring(v):match("%d+")) or 0
         end,
     })
 
