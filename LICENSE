@@ -1,6 +1,6 @@
 --[[
     ==========================================================
-    FANTASMA1L HUB - COMPLETO UNIFICADO v50
+    FANTASMA1L HUB - COMPLETO UNIFICADO v51
     (+ LOCUST COM REDE | POOLROOMS | PREFIXO ; | TORNADO EF5
      | IMAGENS CORRIGIDAS | EXPANSAO DE DOMINIO DO GOJO)
     ==========================================================
@@ -5782,11 +5782,11 @@ do
 
     -- ======== CONFIGURAÇÃO ========
     local COOLDOWN    = 20     -- recarga (s) depois que a expansão termina
-    local HOLD_TIME   = 5      -- tempo que o alvo leva pra morrer (paralisado)
+    local HOLD_TIME   = 9.5    -- tempo do domínio depois da abertura (alvo paralisado até o fim) -> duração total ~15s
     local MAX_DIST    = 600    -- distância máxima pra achar o alvo mais próximo
     local HOLE_STUDS  = 150    -- diâmetro do buraco negro (como na imagem de referência)
-    local GOJO_SOUND  = ""     -- opcional: "rbxassetid://ID_DA_MUSICA_DO_DOMINIO"
-    local COSMOS_SKY  = ""     -- opcional: ID de uma skybox de galáxia (decal/imagem)
+    local GOJO_SOUND  = "rbxassetid://6667923288"   -- música que toca quando a expansão ativa
+    local COSMOS_SKY  = "108682468477856"          -- skybox do domínio (some quando a expansão termina)
     local LOW         = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
     local C_WHITE  = Color3.new(1, 1, 1)
@@ -6082,7 +6082,7 @@ do
         local oldFov = cam and cam.FieldOfView or 70
         local renderName = "GojoRender" .. tostring(math.random(1, 1000000))
         local saved, hiddenAtm, hiddenSky = {}, {}, {}
-        local cc, bloom, gui, flash, domainSky, bb
+        local cc, bloom, gui, flash, domainSky, bb, domainSnd
         local running, paralyzed, teleported = true, false, false
         local frozen = {}
         local casterTrack
@@ -6114,15 +6114,18 @@ do
             if iAmCaster then sHum.WalkSpeed = 0 end
 
             if GOJO_SOUND ~= "" and near then
-                local snd = Instance.new("Sound")
-                snd.SoundId, snd.Volume = GOJO_SOUND, 5
-                snd.Parent = sh
-                snd:Play()
-                Debris:AddItem(snd, 40)
+                domainSnd = Instance.new("Sound")
+                domainSnd.SoundId, domainSnd.Volume = GOJO_SOUND, 4
+                domainSnd.Looped = false
+                -- quem vai pro domínio ouve sem perder volume pela distância; os outros ouvem do Gojo
+                domainSnd.Parent = participant and game:GetService("SoundService") or sh
+                domainSnd:Play()
+                Debris:AddItem(domainSnd, 60)
             end
 
             -- ===== preparação de quem vai pro domínio (você e o alvo) =====
             local lineData, smokes, splashE, stars = {}, {}, {}, nil
+            local inkGroup
             local holeOpened, linesOn, ringT0 = false, false, 0
             local L
 
@@ -6282,6 +6285,45 @@ do
                     splashE[#splashE + 1] = e
                 end
 
+                -- --- tinta branca pintada ao fundo do domínio (manchas brancas como na referência) ---
+                do
+                    local backWall = mkp(folder, Vector3.new(900, 450, 1), CFrame.new(C + Vector3.new(0, 90, 360)), C_WHITE, nil, 1)
+                    local sgui = Instance.new("SurfaceGui")
+                    sgui.Face = Enum.NormalId.Front
+                    sgui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+                    sgui.CanvasSize = Vector2.new(1800, 900)
+                    sgui.LightInfluence = 0
+                    sgui.AlwaysOnTop = false
+                    sgui.Parent = backWall
+                    inkGroup = Instance.new("CanvasGroup")
+                    inkGroup.Size = UDim2.fromScale(1, 1)
+                    inkGroup.BackgroundTransparency = 1
+                    inkGroup.GroupTransparency = 1
+                    inkGroup.Parent = sgui
+                    local function blob(cx, cy, px, col, tr)
+                        local f = Instance.new("Frame")
+                        f.AnchorPoint = Vector2.new(0.5, 0.5)
+                        f.Position = UDim2.fromScale(cx, cy)
+                        f.Size = UDim2.fromOffset(px, px * (0.7 + math.random() * 0.6))
+                        f.Rotation = math.random(0, 360)
+                        f.BackgroundColor3 = col
+                        f.BackgroundTransparency = tr
+                        f.BorderSizePixel = 0
+                        Instance.new("UICorner", f).CornerRadius = UDim.new(1, 0)
+                        f.Parent = inkGroup
+                    end
+                    for _ = 1, (LOW and 7 or 12) do
+                        local cx, cy = 0.06 + math.random() * 0.88, 0.1 + math.random() * 0.8
+                        for _ = 1, 9 do
+                            local a, d = math.random() * math.pi * 2, math.random() * 0.07
+                            local bx, by = cx + math.cos(a) * d * 0.5, cy + math.sin(a) * d
+                            local px = 40 + math.random() * 150
+                            blob(bx, by, px * 1.5, Color3.fromRGB(190, 225, 255), 0.6)   -- brilho azulado em volta
+                            blob(bx, by, px, C_WHITE, 0.03)                                -- mancha branca
+                        end
+                    end
+                end
+
                 -- --- loop visual único ---
                 local rt0 = os.clock()
                 RunService:BindToRenderStep(renderName, Enum.RenderPriority.Camera.Value + 1, function(dt)
@@ -6366,6 +6408,7 @@ do
                 local rootF
                 bb, rootF, L = buildBlackHoleBillboard(holeAnchor, HOLE_STUDS)
                 tw(rootF, 0.9, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Back)   -- abertura com impacto
+                if inkGroup then tw(inkGroup, 1.4, { GroupTransparency = 0 }) end
                 if cam then
                     tw(cam, 0.3, { FieldOfView = oldFov - 8 })
                     task.delay(0.35, function()
@@ -6439,6 +6482,12 @@ do
         pcall(function() folder:Destroy() end)
         pcall(function() if bb then bb:Destroy() end end)
         pcall(function() if domainSky then domainSky:Destroy() end end)
+        pcall(function()
+            if domainSnd then
+                tw(domainSnd, 0.8, { Volume = 0 })
+                Debris:AddItem(domainSnd, 1)
+            end
+        end)
         pcall(function() if cc then cc:Destroy() end end)
         pcall(function() if bloom then bloom:Destroy() end end)
         for k, v in pairs(saved) do pcall(function() Lighting[k] = v end) end
@@ -7104,7 +7153,7 @@ if not ok or not WindUI then
     notify("Erro", "Falha ao carregar WindUI.")
 else
     local HUB_NAME   = "Fantasma1l hub"
-    local HUB_VER    = "FANTASMA1L HUB | Administrator Version | V1.28"
+    local HUB_VER    = "FANTASMA1L HUB | Administrator Version | V1.29"
     local HUB_AUTHOR = "By Fantasma1l / renegado6661l"
 
     -- chama método do WindUI tentando as duas assinaturas (obj:método e obj.método)
