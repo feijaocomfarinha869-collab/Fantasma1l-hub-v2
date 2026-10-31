@@ -1,6 +1,6 @@
 --[[
     ==========================================================
-    FANTASMA1L HUB - COMPLETO UNIFICADO v48
+    FANTASMA1L HUB - COMPLETO UNIFICADO v49
     (+ LOCUST COM REDE | POOLROOMS | PREFIXO ; | TORNADO EF5
      | IMAGENS CORRIGIDAS | EXPANSAO DE DOMINIO DO GOJO)
     ==========================================================
@@ -4632,6 +4632,7 @@ do
         local arenaOn, redOn, blueOn = false, true, true
         local smokesRed, smokesBlue = {}, {}
         local barrier = {}
+        local lineData, wallX, techSaved, atm, dof, dome = {}, 0, nil, nil, nil, nil
         local T0 = os.clock()
 
         local function alive() return DOMAIN_BATTLE.token == token end
@@ -4729,6 +4730,41 @@ do
             beamLine(base - d * len / 2, base + d * len / 2, 0.7 + math.random() * 1.3, BLUES[math.random(#BLUES)], nil, 0.35)
         end
 
+        -- rachadura / raio branco atravessando a parede de choque
+        local function crackBolt()
+            local a = C + Vector3.new(wallX + (math.random() - 0.5) * 6, 5 + math.random() * 100, -150 + math.random() * 170)
+            local b = a + Vector3.new((math.random() - 0.5) * 8, (math.random() - 0.5) * 120, (math.random() - 0.5) * 160)
+            local segs = 9
+            local holder = part(folder, Vector3.new(0.2, 0.2, 0.2), CFrame.new(a), Color3.new(1, 1, 1), nil, 1)
+            local atts = {}
+            local dir = b - a
+            for i = 0, segs do
+                local at = Instance.new("Attachment")
+                at.Parent = holder
+                local jit = (i == 0 or i == segs) and 0 or 7
+                at.WorldPosition = a + dir * (i / segs)
+                    + Vector3.new((math.random() - 0.5) * jit, (math.random() - 0.5) * jit, (math.random() - 0.5) * jit)
+                atts[#atts + 1] = at
+            end
+            local glow = (math.random() < 0.5) and Color3.fromRGB(255, 40, 60) or Color3.fromRGB(70, 110, 255)
+            local made = {}
+            for i = 1, segs do
+                for _, spec in ipairs({ { glow, 1.8, 0.45 }, { Color3.new(1, 1, 1), 0.5, 0 } }) do
+                    local m = Instance.new("Beam")
+                    m.Attachment0, m.Attachment1 = atts[i], atts[i + 1]
+                    m.Width0, m.Width1 = spec[2], spec[2]
+                    m.FaceCamera, m.Segments = true, 1
+                    m.Color = ColorSequence.new(spec[1])
+                    m.Transparency = NumberSequence.new(spec[3])
+                    m.LightEmission, m.LightInfluence = 1, 0
+                    m.Parent = holder
+                    made[#made + 1] = m
+                end
+            end
+            for _, m in ipairs(made) do tween(m, 0.3, { Width0 = 0, Width1 = 0 }) end
+            DB:AddItem(holder, 0.4)
+        end
+
         local ok, err = pcall(function()
             -- ===== 1) BOLINHA PRETA DO GOJO (todo mundo perto vê) =====
             if near and gHrp then
@@ -4791,6 +4827,28 @@ do
                 bloom.Parent = Lighting
                 tween(bloom, 1.0, { Intensity = 2.2, Size = 60 })
 
+                -- realismo: luz Future (sombras de luzes), névoa roxa, profundidade de campo, luzes de contorno
+                pcall(function() techSaved = gethiddenproperty(Lighting, "Technology") end)
+                pcall(function() sethiddenproperty(Lighting, "Technology", Enum.Technology.Future) end)
+                pcall(function()
+                    atm = Instance.new("Atmosphere")
+                    atm.Name = "DomainBattleAtm"
+                    atm.Density, atm.Offset, atm.Glare, atm.Haze = 0.3, 0.1, 0, 1.2
+                    atm.Color, atm.Decay = Color3.fromRGB(90, 30, 100), Color3.fromRGB(40, 10, 50)
+                    atm.Parent = Lighting
+                    dof = Instance.new("DepthOfFieldEffect")
+                    dof.Name = "DomainBattleDOF"
+                    dof.FarIntensity, dof.NearIntensity, dof.FocusDistance, dof.InFocusRadius = 0.3, 0, 40, 70
+                    dof.Parent = Lighting
+                end)
+                for _, sx in ipairs({ -1, 1 }) do
+                    local lp = part(folder, Vector3.new(1, 1, 1), CFrame.new(C + Vector3.new(sx * 34, 14, 20)), Color3.new(1, 1, 1), nil, 1)
+                    local pl = Instance.new("PointLight")
+                    pl.Color = sx < 0 and Color3.fromRGB(255, 25, 30) or Color3.fromRGB(70, 130, 255)
+                    pl.Range, pl.Brightness, pl.Shadows = 45, 7, true
+                    pl.Parent = lp
+                end
+
                 -- ---------- ARENA ----------
                 local function solid(size, off)
                     local b = part(folder, size, CFrame.new(C + off), Color3.new(1, 1, 1), nil, 1)
@@ -4818,6 +4876,9 @@ do
                 setL("FogStart", 250)
                 setL("FogEnd", 1800)
                 setL("ExposureCompensation", 0)
+                setL("GlobalShadows", true)
+                setL("EnvironmentDiffuseScale", 0.4)
+                setL("EnvironmentSpecularScale", 0.6)
 
                 -- luzes coloridas (vermelho à esquerda, azul à direita)
                 for i = 1, 4 do
@@ -4882,7 +4943,7 @@ do
                     local pos = C + Vector3.new(120 + math.cos(a) * 90, 20 + math.random() * 110, -90 + math.sin(a) * 110)
                     puff(pos, tealSeq, smokesBlue, 0.35, 160, 320, LOWFX and 1.2 or 2.5, 0.55)
                 end
-                for _, off in ipairs({ Vector3.new(135, 45, -150), Vector3.new(60, -5, -140), Vector3.new(115, 80, -165) }) do
+                for _, off in ipairs({ Vector3.new(120, 40, -100), Vector3.new(55, -5, -95), Vector3.new(105, 75, -120) }) do
                     local sp = part(folder, Vector3.new(4, 4, 4), CFrame.new(C + off), Color3.new(1, 1, 1), nil, 1)
                     local e = Instance.new("ParticleEmitter")
                     e.Texture = "rbxasset://textures/particles/smoke_main.dds"
@@ -4924,6 +4985,45 @@ do
                 stars.LightEmission, stars.LightInfluence = 1, 0
                 stars.Parent = starPart
                 stars:Emit(LOWFX and 80 or 200)
+
+                -- fogo e brasas no lado vermelho
+                for _ = 1, (LOWFX and 5 or 10) do
+                    local fp = part(folder, Vector3.new(4, 4, 4), CFrame.new(C + Vector3.new(-170 + math.random() * 150, 2 + math.random() * 30, -160 + math.random() * 190)), Color3.new(1, 1, 1), nil, 1)
+                    local fe = Instance.new("ParticleEmitter")
+                    fe.Texture = "rbxasset://textures/particles/fire_main.dds"
+                    fe.Rate = LOWFX and 6 or 12
+                    fe.Lifetime = NumberRange.new(1, 2)
+                    fe.Speed = NumberRange.new(6, 16)
+                    fe.SpreadAngle = Vector2.new(25, 25)
+                    fe.EmissionDirection = Enum.NormalId.Top
+                    fe.Acceleration = Vector3.new(0, 10, 0)
+                    fe.Rotation = NumberRange.new(0, 360)
+                    fe.RotSpeed = NumberRange.new(-60, 60)
+                    fe.LightEmission, fe.LightInfluence = 1, 0
+                    fe.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 14), NumberSequenceKeypoint.new(1, 0) })
+                    fe.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1) })
+                    fe.Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 190, 80)),
+                        ColorSequenceKeypoint.new(0.4, Color3.fromRGB(255, 50, 20)),
+                        ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 0, 0)) })
+                    fe.Parent = fp
+                    smokesRed[#smokesRed + 1] = fe
+                end
+
+                -- domo vermelho enorme na borda esquerda (domínio do Sukuna visto de longe)
+                dome = part(folder, Vector3.new(300, 300, 300), CFrame.new(C + Vector3.new(-250, 60, -50)), Color3.fromRGB(190, 0, 12), Enum.Material.Neon, 0.1, Enum.PartType.Ball)
+
+                -- linhas de velocidade vermelhas/azuis saindo do buraco negro
+                local holeC = C + Vector3.new(80, 45, -140)
+                local LC = { Color3.fromRGB(255, 30, 60), Color3.fromRGB(255, 30, 60), Color3.fromRGB(60, 80, 255),
+                    Color3.fromRGB(60, 80, 255), Color3.fromRGB(150, 90, 255), Color3.new(1, 1, 1) }
+                for i = 1, (LOWFX and 30 or 60) do
+                    local tgt = C + Vector3.new(-130 + math.random() * 260, math.random() * 100, math.random() * 60)
+                    local d = (tgt - holeC).Unit
+                    local len = 60 + math.random() * 120
+                    local pt = part(folder, Vector3.new(0.35, 0.35, len), CFrame.new(holeC), LC[math.random(#LC)], Enum.Material.Neon, 0.1)
+                    lineData[i] = { part = pt, d = d, r = 30 + math.random() * 400, sp = 260 + math.random() * 420, V = holeC }
+                end
 
                 -- parede de choque no meio
                 wall = part(folder, Vector3.new(2.5, 260, 260), CFrame.new(C + Vector3.new(0, 110, -20)), Color3.fromRGB(255, 235, 200), Enum.Material.Neon, 0.75)
@@ -4994,11 +5094,20 @@ do
                         local pr = math.clamp((t - 1.9) / 7.5, 0, 1)
                         local k = pr * pr * (3 - 2 * pr)
                         local x = (sukunaWins and 1 or -1) * 62 * k + math.sin(t * 6.5) * 7 * (1 - k * 0.6)
+                        wallX = x
                         wall.CFrame = CFrame.new(C + Vector3.new(x, 110, -20))
                         for _, bz in ipairs(barrier) do
                             if bz.part.Parent then bz.part.CFrame = CFrame.new(C + Vector3.new(x + bz.dx, bz.y, bz.z)) end
                         end
                         if pr < 1 then wall.Transparency = 0.7 + 0.15 * math.sin(t * 17) end
+                    end
+                    if arenaOn then
+                        for _, ln in ipairs(lineData) do
+                            ln.r += ln.sp * dt
+                            if ln.r > 460 then ln.r = 30 end
+                            local pos = ln.V + ln.d * ln.r
+                            ln.part.CFrame = CFrame.lookAt(pos, pos + ln.d)
+                        end
                     end
                     if arenaOn and cam then
                         local sh = 0.012
@@ -5016,6 +5125,7 @@ do
                                 if math.random() < 0.7 then edgeStreak() end
                             end
                             if blueOn then for _ = 1, (LOWFX and 1 or 2) do streakBlue() end end
+                            if math.random() < 0.45 then crackBolt() end
                         end
                         task.wait(0.07)
                     end
@@ -5047,11 +5157,12 @@ do
                 tween(bloom, 0.6, { Intensity = 1.2, Size = 30 })
                 tween(flash, 1.0, { BackgroundTransparency = 1 })
                 if ttl then ttl.Text = "CHOQUE DE DOMINIOS" end
+                if cam then tween(cam, 1.2, { FieldOfView = oldFov - 6 }) end
 
                 -- buraco negro do Gojo (lado azul)
-                local holeAnchor = part(folder, Vector3.new(1, 1, 1), CFrame.new(C + Vector3.new(85, 55, -185)), Color3.new(1, 1, 1), nil, 1)
+                local holeAnchor = part(folder, Vector3.new(1, 1, 1), CFrame.new(C + Vector3.new(80, 45, -140)), Color3.new(1, 1, 1), nil, 1)
                 local rootF
-                bb, rootF, L = GOJO.buildHole(holeAnchor, 200)
+                bb, rootF, L = GOJO.buildHole(holeAnchor, 190)
                 tween(rootF, 0.9, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Back)
                 task.delay(0.6, function()
                     if L then
@@ -5071,6 +5182,7 @@ do
             if sukunaWins then
                 if ttl then ttl.Text, ttl.TextColor3, ttl.TextSize = "SUKUNA VENCE! O DOMINIO DO GOJO QUEBROU!", Color3.fromRGB(255, 60, 60), 22 end
                 blueOn = false
+                if dome then tween(dome, 1.5, { Size = Vector3.new(420, 420, 420) }) end
                 for _, e in ipairs(smokesBlue) do e.Enabled = false end
                 if participant then
                     crack()
@@ -5097,6 +5209,7 @@ do
             else
                 if ttl then ttl.Text, ttl.TextColor3, ttl.TextSize = "GOJO VENCE! O DOMINIO DO SUKUNA QUEBROU!", Color3.fromRGB(90, 200, 255), 22 end
                 redOn = false
+                if dome then tween(dome, 0.6, { Transparency = 1 }) end
                 for _, e in ipairs(smokesRed) do e.Enabled = false end
                 if participant then
                     crack()
@@ -5152,6 +5265,9 @@ do
         pcall(function() folder:Destroy() end)
         pcall(function() if bb then bb:Destroy() end end)
         pcall(function() if sky then sky:Destroy() end end)
+        pcall(function() if atm then atm:Destroy() end end)
+        pcall(function() if dof then dof:Destroy() end end)
+        if techSaved ~= nil then pcall(function() sethiddenproperty(Lighting, "Technology", techSaved) end) end
         pcall(function() if cc then cc:Destroy() end end)
         pcall(function() if bloom then bloom:Destroy() end end)
         for k, v in pairs(saved) do pcall(function() Lighting[k] = v end) end
@@ -6786,7 +6902,7 @@ if not ok or not WindUI then
     notify("Erro", "Falha ao carregar WindUI.")
 else
     local HUB_NAME   = "Fantasma1l hub"
-    local HUB_VER    = "FANTASMA1L HUB | Administrator Version | V1.26"
+    local HUB_VER    = "FANTASMA1L HUB | Administrator Version | V1.27"
     local HUB_AUTHOR = "By Fantasma1l / renegado6661l"
 
     -- chama método do WindUI tentando as duas assinaturas (obj:método e obj.método)
