@@ -7152,27 +7152,56 @@ function FantasmaGoner.getSpec(char)
     end
     return sp
 end
-
--- carrega um asset (GetObjects, com fallback InsertService)
 function FantasmaGoner.load(id)
     for attempt = 1, 3 do
-        local ok, objs = pcall(function() return game:GetObjects("rbxassetid://" .. id) end)
-        if ok and objs and #objs > 0 then return objs end
+        for _, url in ipairs({ "rbxassetid://" .. id, "http://www.roblox.com/asset/?id=" .. id }) do
+            local ok, objs = pcall(function() return game:GetObjects(url) end)
+            if ok and objs and #objs > 0 then return objs end
+        end
         local ok2, model = pcall(function() return game:GetService("InsertService"):LoadAsset(id) end)
-        if ok2 and model then return { model } end
-        task.wait(0.4)
+        if ok2 and model then
+            local kids = model:GetChildren()
+            if #kids > 0 then return kids end
+        end
+        task.wait(0.5)
     end
+    warn("[Goner] nao carregou ID " .. tostring(id))
     return nil
 end
 
-function FantasmaGoner.retire(inst)
-    FantasmaGoner.retired[inst] = true
-    pcall(function() inst:Destroy() end)
+-- prende o acessorio manualmente (plano B quando AddAccessory nao solda)
+function FantasmaGoner.attachManual(char, acc)
+    local handle = acc:FindFirstChild("Handle")
+    if not handle then return false end
+    acc.Parent = char
+    local att = handle:FindFirstChildOfClass("Attachment")
+    if att then
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") then
+                local a = p:FindFirstChild(att.Name)
+                if a and a:IsA("Attachment") then
+                    handle.Anchored, handle.CanCollide, handle.Massless = false, false, true
+                    handle.CFrame = a.WorldCFrame * att.CFrame:Inverse()
+                    local w = Instance.new("Weld")
+                    w.Name = "AccessoryWeld"
+                    w.Part0, w.Part1, w.C0, w.C1 = p, handle, a.CFrame, att.CFrame
+                    w.Parent = handle
+                    return true
+                end
+            end
+        end
+    end
+    local head = char:FindFirstChild("Head")
+    if not head then return false end
+    handle.Anchored, handle.CanCollide, handle.Massless = false, false, true
+    local w = Instance.new("Weld")
+    w.Name = "AccessoryWeld"
+    w.Part0, w.Part1 = head, handle
+    w.C0 = CFrame.new(0, head.Size.Y / 2, 0) * acc.AttachmentPoint
+    w.Parent = handle
+    return true
 end
 
--- aplica UM ID localmente. Cada item é rastreado pelo ID (sem comparar aparência,
--- então acessórios parecidos como as duas asas NÃO são tratados como repetidos).
--- retorna -1 se não carregou
 function FantasmaGoner.applyId(char, id)
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hum then return 0 end
@@ -7180,7 +7209,6 @@ function FantasmaGoner.applyId(char, id)
     if not objs then return -1 end
     local spec = FantasmaGoner.getSpec(char)
 
-    -- remove o que ESTE id colocou antes (reaplicar nunca duplica)
     for _, inst in ipairs(spec.items[id] or {}) do
         if inst.Parent then FantasmaGoner.retire(inst) end
     end
@@ -7193,7 +7221,6 @@ function FantasmaGoner.applyId(char, id)
         for _, d in ipairs(o:GetDescendants()) do table.insert(list, d) end
     end
 
-    local accs = {}
     for _, o in ipairs(list) do
         if o:IsA("Shirt") or o:IsA("Pants") or o:IsA("ShirtGraphic") or o:IsA("BodyColors") then
             for _, old in ipairs(char:GetChildren()) do
@@ -7206,222 +7233,54 @@ function FantasmaGoner.applyId(char, id)
         elseif o:IsA("Accessory") then
             local c = o:Clone()
             c:SetAttribute("GonerLocal", true)
-            local ok = pcall(function() hum:AddAccessory(c) end)
-            if ok and c.Parent == char then
-                table.insert(mine, c)
-                table.insert(accs, c)
-            else
-                pcall(function() c:Destroy() end)
+            pcall(function() hum:AddAccessory(c) end)
+            task.wait(0.15)
+            local h = c:FindFirstChild("Handle")
+            local welded = c.Parent == char and h and (h:FindFirstChildWhichIsA("Weld")
+                or h:FindFirstChildWhichIsA("WeldConstraint") or h:FindFirstChildWhichIsA("Motor6D"))
+            if not welded then
+                if h then
+                    for _, w in ipairs(h:GetChildren()) do
+                        if w:IsA("Weld") or w:IsA("WeldConstraint") then w:Destroy() end
+                    end
+                end
+                welded = FantasmaGoner.attachManual(char, c)
             end
+            if welded then table.insert(mine, c) else pcall(function() c:Destroy() end) end
         elseif o:IsA("Decal") and o.Name == "face" and char:FindFirstChild("Head") then
             local f = char.Head:FindFirstChild("face")
             if f then f:Destroy() end
-            o:Clone().Parent = char.Head
-        end
-    end
-
-    -- acessório que não prendeu no corpo cai no chão: apaga
-    if #accs > 0 then
-        task.wait(0.4)
-        for i = #mine, 1, -1 do
-            local inst = mine[i]
-            if inst:IsA("Accessory") then
-                local h = inst:FindFirstChild("Handle")
-                local welded = h and (h:FindFirstChildWhichIsA("Weld") or h:FindFirstChildWhichIsA("WeldConstraint")
-                    or h:FindFirstChildWhichIsA("Motor6D"))
-                if not welded then
-                    FantasmaGoner.retire(inst)
-                    table.remove(mine, i)
-                end
-            end
+            local fc = o:Clone()
+            fc.Parent = char.Head
+            table.insert(mine, fc)
         end
     end
     return #mine
 end
 
--- repõe só o que sumiu (por ID); o que já está no personagem não é mexido
-function FantasmaGoner.ensure(char)
-    local spec = FantasmaGoner.specs[char]
-    if not spec or not char or not char.Parent then return end
-    local rebuild = {}
-    for id, list in pairs(spec.items) do
-        for i = #list, 1, -1 do
-            if FantasmaGoner.retired[list[i]] then table.remove(list, i) end
-        end
-        for _, inst in ipairs(list) do
-            if inst.Parent ~= char then rebuild[id] = true break end
-        end
-    end
-    for id in pairs(rebuild) do
-        FantasmaGoner.applyId(char, id)
-        task.wait(0.1)
-    end
-end
-
-function FantasmaGoner.startWatcher()
-    if FantasmaGoner.watcher then return end
-    FantasmaGoner.watcher = true
-    task.spawn(function()
-        while true do
-            task.wait(1.5)
-            for char in pairs(FantasmaGoner.specs) do
-                if char and char.Parent then pcall(FantasmaGoner.ensure, char) end
-            end
-        end
-    end)
-end
-
--- aplica todos os IDs localmente, um de cada vez (usado no alvo do machado)
-function FantasmaGoner.applyLocal(char)
-    if not char then return end
-    local failed = {}
-    for _, id in ipairs(FantasmaGoner.CLOTHES) do
-        if FantasmaGoner.applyId(char, id) == -1 then table.insert(failed, id) end
-        task.wait(0.15)
-    end
-    FantasmaGoner.startWatcher()
-    if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
-end
-
--- equipa no Brookhaven: cada ID é enviado UMA vez por personagem (reenviar desequipa)
+-- aplica tudo LOCAL (sem remotes do Brookhaven, que so bagunçavam a lista de roupas)
 function FantasmaGoner.wear(char)
     char = char or LocalPlayer.Character
     if not char then return end
+    char:WaitForChild("Humanoid", 5)
+    char:WaitForChild("Head", 5)
+    task.wait(0.5)
     local spec = FantasmaGoner.getSpec(char)
-    local RS = game:GetService("ReplicatedStorage")
-    local remotes = {}
-    for _, d in ipairs(RS:GetDescendants()) do
-        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
-            local n = string.lower(d.Name)
-            if n:find("wear") or n:find("cloth") or n:find("outfit") or n:find("accessor") then
-                table.insert(remotes, d)
-            end
-        end
-    end
     local failed = {}
     for _, id in ipairs(FantasmaGoner.CLOTHES) do
-        if not spec.worn[id] then
-            spec.worn[id] = true
-            local before = {}
-            for _, o in ipairs(char:GetChildren()) do before[o] = true end
-            for _, r in ipairs(remotes) do
-                pcall(function()
-                    if r:IsA("RemoteEvent") then r:FireServer(id)
-                    else task.spawn(function() pcall(function() r:InvokeServer(id) end) end) end
-                end)
-            end
-            task.wait(1.5)
-            local mine = {}
-            for _, o in ipairs(char:GetChildren()) do
-                if not before[o] and (o:IsA("Accessory") or o:IsA("Shirt") or o:IsA("Pants")
-                    or o:IsA("ShirtGraphic") or o:IsA("BodyColors")) then
-                    table.insert(mine, o)
-                end
-            end
-            if #mine > 0 then
-                spec.items[id] = mine            -- o Brookhaven colocou: só vigiar
-            else
-                local r = FantasmaGoner.applyId(char, id)   -- não colocou: aplica local
-                if r == -1 then table.insert(failed, id) end
+        local have = spec.items[id]
+        if not have or #have == 0 then
+            if FantasmaGoner.applyId(char, id) == -1 then
+                table.insert(failed, id)
             end
         end
+        task.wait(0.15)
     end
     FantasmaGoner.ensure(char)
     FantasmaGoner.startWatcher()
-    if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
-end
-
--- transforma o PRÓPRIO jogador em goner (usado pelo comando de rede)
-function FantasmaGoner.turnSelf()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local track = safePlayAnimation(char, FantasmaGoner.GONER_ANIM)
-    task.wait(FantasmaGoner.TURN_DELAY)
-    if track then pcall(function() track:Stop() end) end
-    FantasmaGoner.wear(char)
-end
-
--- transforma outro jogador (animação -> volta ao normal -> goner)
-function FantasmaGoner.turnOther(plr)
-    local char = plr and plr.Character
-    if not char then return end
-    local now = os.clock()
-    if FantasmaGoner.hit[plr] and now - FantasmaGoner.hit[plr] < 6 then return end
-    FantasmaGoner.hit[plr] = now
-    sendNetCmd(";GONER_TURN " .. plr.Name)           -- quem usa o hub aplica no próprio client
-    local track = safePlayAnimation(char, FantasmaGoner.GONER_ANIM)
-    task.wait(FantasmaGoner.TURN_DELAY)
-    if track then pcall(function() track:Stop() end) end
-    FantasmaGoner.applyLocal(char)
-    notify("Goner", plr.Name .. " virou goner!")
-end
-
-function FantasmaGoner.giveAxe()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local backpack = LocalPlayer:FindFirstChild("Backpack") or char
-    local old = backpack:FindFirstChild("Machado Goner") or char:FindFirstChild("Machado Goner")
-    if old then old:Destroy() end
-
-    local tool
-    local ok, objs = pcall(function() return game:GetObjects("rbxassetid://" .. FantasmaGoner.AXE_ID) end)
-    if ok and objs and objs[1] then
-        if objs[1]:IsA("Tool") then tool = objs[1]
-        else
-            tool = Instance.new("Tool")
-            objs[1].Parent = tool
-        end
+    if #failed > 0 then
+        notify("Goner", "Falhou carregar: " .. table.concat(failed, ", "))
     end
-    if not tool then
-        tool = Instance.new("Tool")
-        tool.RequiresHandle = false
-    end
-    tool.Name = "Machado Goner"
-    tool.ToolTip = "Machado Goner"
-    tool.CanBeDropped = false
-    local okIcon, img = pcall(resolveImage, FantasmaGoner.ICON)
-    tool.TextureId = (okIcon and img) or FantasmaGoner.ICON
-
-    local swingUntil = 0
-    tool.Activated:Connect(function()
-        local c = LocalPlayer.Character
-        swingUntil = os.clock() + FantasmaGoner.SWING_TIME
-        safePlayAnimation(c, FantasmaGoner.CLICK_ANIM)
-    end)
-
-    local function onTouch(part)
-        if FantasmaGoner.SWING_ONLY and os.clock() > swingUntil then return end
-        local model = part:FindFirstAncestorOfClass("Model")
-        local plr = model and Players:GetPlayerFromCharacter(model)
-        if plr and plr ~= LocalPlayer then
-            task.spawn(FantasmaGoner.turnOther, plr)
-        end
-    end
-    for _, p in ipairs(tool:GetDescendants()) do
-        if p:IsA("BasePart") then p.Touched:Connect(onTouch) end
-    end
-    tool.DescendantAdded:Connect(function(p)
-        if p:IsA("BasePart") then p.Touched:Connect(onTouch) end
-    end)
-
-    tool.Parent = backpack
-end
-
-function FantasmaGoner.activate()
-    if not FantasmaGoner.respawnConn then
-        FantasmaGoner.respawnConn = LocalPlayer.CharacterAdded:Connect(function(c)
-            if not FantasmaGoner.keep then return end
-            task.wait(3)
-            FantasmaGoner.giveAxe()
-            FantasmaGoner.wear(c)
-        end)
-    end
-    FantasmaGoner.keep = true
-    task.spawn(function()
-        FantasmaGoner.giveAxe()
-        FantasmaGoner.wear(LocalPlayer.Character)
-        notify("Goner", "Gonerplayer ativado! Roupa equipada + Machado Goner.")
-    end)
 end
 
 local function triggerCommand(action, target, extraArg)
