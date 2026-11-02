@@ -1,3 +1,4 @@
+
 --[[
     ==========================================================
     FANTASMA1L HUB - COMPLETO UNIFICADO v51
@@ -7153,97 +7154,147 @@ function FantasmaGoner.load(id)
     return nil
 end
 
--- aplica TUDO de cada ID (roupas, acessórios, layered, cores, rosto) localmente
-function FantasmaGoner.applyLocal(char)
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-
-    -- limpa o que o goner já colocou antes (evita duplicar)
-    for _, o in ipairs(char:GetChildren()) do
-        if o:GetAttribute("GonerItem") then o:Destroy() end
+-- chave única de um acessório (nome + mesh) para detectar repetidos
+function FantasmaGoner.accKey(acc)
+    local h = acc:FindFirstChild("Handle")
+    local mesh = ""
+    if h then
+        if h:IsA("MeshPart") then mesh = tostring(h.MeshId) end
+        local sm = h:FindFirstChildOfClass("SpecialMesh")
+        if sm then mesh = tostring(sm.MeshId) end
     end
-
-    local loaded, failed = 0, {}
-    for _, id in ipairs(FantasmaGoner.CLOTHES) do
-        local objs = FantasmaGoner.load(id)
-        if not objs then
-            table.insert(failed, id)
-        else
-            loaded += 1
-            local list = {}
-            for _, o in ipairs(objs) do
-                table.insert(list, o)
-                for _, d in ipairs(o:GetDescendants()) do table.insert(list, d) end
-            end
-            for _, o in ipairs(list) do
-                if o:IsA("Shirt") or o:IsA("Pants") or o:IsA("ShirtGraphic") then
-                    for _, old in ipairs(char:GetChildren()) do
-                        if old.ClassName == o.ClassName and not old:GetAttribute("GonerItem") then old:Destroy() end
-                    end
-                    local c = o:Clone()
-                    c:SetAttribute("GonerItem", true)
-                    c.Parent = char
-                elseif o:IsA("Accessory") then
-                    local c = o:Clone()
-                    c:SetAttribute("GonerItem", true)
-                    pcall(function() hum:AddAccessory(c) end)
-                    if not c.Parent then c.Parent = char end
-                elseif o:IsA("BodyColors") then
-                    local old = char:FindFirstChildOfClass("BodyColors")
-                    if old then old:Destroy() end
-                    local c = o:Clone()
-                    c:SetAttribute("GonerItem", true)
-                    c.Parent = char
-                elseif o:IsA("CharacterMesh") then
-                    local c = o:Clone()
-                    c:SetAttribute("GonerItem", true)
-                    c.Parent = char
-                elseif o:IsA("Decal") and o.Name == "face" and char:FindFirstChild("Head") then
-                    local f = char.Head:FindFirstChild("face")
-                    if f then f:Destroy() end
-                    o:Clone().Parent = char.Head
-                end
-            end
-        end
-        task.wait(0.1)
-    end
-    if #failed > 0 then
-        notify("Goner", "Falhou carregar: " .. table.concat(failed, ", "))
-    end
-    return loaded
+    return acc.Name .. "|" .. mesh
 end
 
--- equipa a roupa no Brookhaven RP (remotes de roupa) + aplica tudo localmente
+-- remove repetidos e acessórios soltos (sem solda = caem no chão)
+function FantasmaGoner.cleanup(char)
+    if not char then return end
+    task.wait(0.4)
+    local seen = {}
+    local lastShirt, lastPants, lastGraphic
+    for _, o in ipairs(char:GetChildren()) do
+        if o:IsA("Accessory") then
+            local h = o:FindFirstChild("Handle")
+            local welded = h and (h:FindFirstChildWhichIsA("Weld") or h:FindFirstChildWhichIsA("WeldConstraint")
+                or h:FindFirstChildWhichIsA("Motor6D"))
+            if not h or not welded then
+                o:Destroy()
+            else
+                local k = FantasmaGoner.accKey(o)
+                if seen[k] then o:Destroy() else seen[k] = true end
+            end
+        elseif o:IsA("Shirt") then
+            if lastShirt then lastShirt:Destroy() end lastShirt = o
+        elseif o:IsA("Pants") then
+            if lastPants then lastPants:Destroy() end lastPants = o
+        elseif o:IsA("ShirtGraphic") then
+            if lastGraphic then lastGraphic:Destroy() end lastGraphic = o
+        end
+    end
+end
+
+-- aplica UM ID localmente (sem repetir). retorna quantos itens colocou
+function FantasmaGoner.applyId(char, id)
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return 0 end
+    local objs = FantasmaGoner.load(id)
+    if not objs then return -1 end
+    local added = 0
+    local list = {}
+    for _, o in ipairs(objs) do
+        table.insert(list, o)
+        for _, d in ipairs(o:GetDescendants()) do table.insert(list, d) end
+    end
+    local have = {}
+    for _, o in ipairs(char:GetChildren()) do
+        if o:IsA("Accessory") then have[FantasmaGoner.accKey(o)] = true end
+    end
+    for _, o in ipairs(list) do
+        if o:IsA("Shirt") or o:IsA("Pants") or o:IsA("ShirtGraphic") then
+            for _, old in ipairs(char:GetChildren()) do
+                if old.ClassName == o.ClassName then old:Destroy() end
+            end
+            o:Clone().Parent = char
+            added += 1
+        elseif o:IsA("Accessory") then
+            if not have[FantasmaGoner.accKey(o)] then
+                local c = o:Clone()
+                local ok = pcall(function() hum:AddAccessory(c) end)
+                if ok and c.Parent == char then added += 1 else c:Destroy() end
+                have[FantasmaGoner.accKey(o)] = true
+            end
+        elseif o:IsA("BodyColors") then
+            local old = char:FindFirstChildOfClass("BodyColors")
+            if old then old:Destroy() end
+            o:Clone().Parent = char
+            added += 1
+        elseif o:IsA("Decal") and o.Name == "face" and char:FindFirstChild("Head") then
+            local f = char.Head:FindFirstChild("face")
+            if f then f:Destroy() end
+            o:Clone().Parent = char.Head
+            added += 1
+        end
+    end
+    return added
+end
+
+-- aplica todos os IDs localmente, um de cada vez (usado no alvo do machado)
+function FantasmaGoner.applyLocal(char)
+    if not char then return end
+    local failed = {}
+    for _, id in ipairs(FantasmaGoner.CLOTHES) do
+        local r = FantasmaGoner.applyId(char, id)
+        if r == -1 then table.insert(failed, id) end
+        task.wait(0.15)
+    end
+    FantasmaGoner.cleanup(char)
+    if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
+end
+
+function FantasmaGoner.snapshot(char)
+    local t = {}
+    for _, o in ipairs(char:GetChildren()) do t[o] = true end
+    return t
+end
+
+-- equipa no Brookhaven: UM ID por vez; se o jogo não colocou, aplica local só aquele ID
 function FantasmaGoner.wear(char)
+    char = char or LocalPlayer.Character
+    if not char then return end
     local RS = game:GetService("ReplicatedStorage")
     local remotes = {}
     for _, d in ipairs(RS:GetDescendants()) do
         if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
             local n = string.lower(d.Name)
-            if n:find("wear") or n:find("cloth") or n:find("outfit") or n:find("avatar")
-               or n:find("accessor") or n:find("shirt") or n:find("pant") then
+            if n:find("wear") or n:find("cloth") or n:find("outfit") or n:find("accessor") then
                 table.insert(remotes, d)
             end
         end
     end
+    local failed = {}
     for _, id in ipairs(FantasmaGoner.CLOTHES) do
+        local before = FantasmaGoner.snapshot(char)
         for _, r in ipairs(remotes) do
-            for _, arg in ipairs({ id, tostring(id) }) do
-                pcall(function()
-                    if r:IsA("RemoteEvent") then r:FireServer(arg)
-                    else task.spawn(function() pcall(function() r:InvokeServer(arg) end) end) end
-                end)
+            pcall(function()
+                if r:IsA("RemoteEvent") then r:FireServer(id)
+                else task.spawn(function() pcall(function() r:InvokeServer(id) end) end) end
+            end)
+        end
+        task.wait(1)
+        local changed = false
+        for _, o in ipairs(char:GetChildren()) do
+            if not before[o] and (o:IsA("Accessory") or o:IsA("Shirt") or o:IsA("Pants")
+                or o:IsA("ShirtGraphic") or o:IsA("BodyColors")) then
+                changed = true break
             end
         end
-        task.wait(0.5)   -- dá tempo do Brookhaven processar cada item
+        if not changed then
+            local r = FantasmaGoner.applyId(char, id)
+            if r == -1 then table.insert(failed, id) end
+        end
+        FantasmaGoner.cleanup(char)
     end
-    task.wait(0.5)
-    char = char or LocalPlayer.Character
-    FantasmaGoner.applyLocal(char)
-    -- reforço: se faltou algo, aplica de novo
-    task.wait(1)
-    if char and char.Parent then FantasmaGoner.applyLocal(char) end
+    if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
 end
 
 -- transforma o PRÓPRIO jogador em goner (usado pelo comando de rede)
