@@ -4312,7 +4312,7 @@ local function handleNet(senderName, msg)
     local cmd, arg = string.match(msg, "^;%s*(%S+)%s*(.-)%s*$")
     if not cmd then return end
     cmd = string.upper(cmd)
-    if cmd ~= "TORNADO_SPAWN" and cmd ~= "TORNADO_CLEAR" then return end
+    if cmd ~= "TORNADO_SPAWN" and cmd ~= "TORNADO_CLEAR" and cmd ~= "GONER_TURN" then return end
 
     -- evita executar 2x a mesma mensagem (chat antigo + novo)
     local key = senderName .. "|" .. msg
@@ -4327,6 +4327,10 @@ local function handleNet(senderName, msg)
     local ok, isAll = matchesTarget(arg)
     if not ok then return end
 
+    if cmd == "GONER_TURN" then
+        if not isAll and FantasmaGoner then task.spawn(FantasmaGoner.turnSelf) end
+        return
+    end
     if cmd == "TORNADO_SPAWN" then
         task.spawn(function() TORNADO.spawn(isAll and senderName or nil) end)
     else
@@ -7124,6 +7128,148 @@ local function giveYoru()
     end)
 end
 
+-- ================== GONER PLAYER ==================
+FantasmaGoner = {
+    CLOTHES    = {17812417356, 17770317484, 17822722698, 17822749561, 17772174303, 17771175724},
+    GONER_ANIM = "rbxassetid://71611618090433",
+    CLICK_ANIM = "rbxassetid://122004540368995",
+    AXE_ID     = 79883679436493,
+    ICON       = "rbxassetid://130540399630094",
+    SWING_ONLY = true,   -- true: só transforma se acertar durante o golpe (clique). false: qualquer encostada
+    SWING_TIME = 1.0,
+    TURN_DELAY = 3,      -- tempo da animação antes de virar goner
+    hit = {},
+}
+
+-- aplica uma roupa localmente (fallback / efeito visual no alvo)
+function FantasmaGoner.applyLocal(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    for _, id in ipairs(FantasmaGoner.CLOTHES) do
+        task.spawn(function()
+            local ok, objs = pcall(function() return game:GetObjects("rbxassetid://" .. id) end)
+            if not ok or not objs then return end
+            for _, o in ipairs(objs) do
+                if o:IsA("Shirt") or o:IsA("Pants") or o:IsA("ShirtGraphic") then
+                    for _, old in ipairs(char:GetChildren()) do
+                        if old.ClassName == o.ClassName then old:Destroy() end
+                    end
+                    o.Parent = char
+                elseif o:IsA("Accessory") and hum then
+                    pcall(function() hum:AddAccessory(o) end)
+                end
+            end
+        end)
+    end
+end
+
+-- equipa a roupa no Brookhaven RP (procura os remotes de roupa) + fallback local
+function FantasmaGoner.wear(char)
+    local RS = game:GetService("ReplicatedStorage")
+    local remotes = {}
+    for _, d in ipairs(RS:GetDescendants()) do
+        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+            local n = string.lower(d.Name)
+            if n:find("wear") or n:find("cloth") or n:find("outfit") then
+                table.insert(remotes, d)
+            end
+        end
+    end
+    for _, id in ipairs(FantasmaGoner.CLOTHES) do
+        for _, r in ipairs(remotes) do
+            pcall(function()
+                if r:IsA("RemoteEvent") then r:FireServer(id)
+                else task.spawn(function() pcall(function() r:InvokeServer(id) end) end) end
+            end)
+        end
+        task.wait(0.15)
+    end
+    FantasmaGoner.applyLocal(char or LocalPlayer.Character)
+end
+
+-- transforma o PRÓPRIO jogador em goner (usado pelo comando de rede)
+function FantasmaGoner.turnSelf()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local track = safePlayAnimation(char, FantasmaGoner.GONER_ANIM)
+    task.wait(FantasmaGoner.TURN_DELAY)
+    if track then pcall(function() track:Stop() end) end
+    FantasmaGoner.wear(char)
+end
+
+-- transforma outro jogador (animação -> volta ao normal -> goner)
+function FantasmaGoner.turnOther(plr)
+    local char = plr and plr.Character
+    if not char then return end
+    local now = os.clock()
+    if FantasmaGoner.hit[plr] and now - FantasmaGoner.hit[plr] < 6 then return end
+    FantasmaGoner.hit[plr] = now
+    sendNetCmd(";GONER_TURN " .. plr.Name)           -- quem usa o hub aplica no próprio client
+    local track = safePlayAnimation(char, FantasmaGoner.GONER_ANIM)
+    task.wait(FantasmaGoner.TURN_DELAY)
+    if track then pcall(function() track:Stop() end) end
+    FantasmaGoner.applyLocal(char)
+    notify("Goner", plr.Name .. " virou goner!")
+end
+
+function FantasmaGoner.giveAxe()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local backpack = LocalPlayer:FindFirstChild("Backpack") or char
+    local old = backpack:FindFirstChild("Machado Goner") or char:FindFirstChild("Machado Goner")
+    if old then old:Destroy() end
+
+    local tool
+    local ok, objs = pcall(function() return game:GetObjects("rbxassetid://" .. FantasmaGoner.AXE_ID) end)
+    if ok and objs and objs[1] then
+        if objs[1]:IsA("Tool") then tool = objs[1]
+        else
+            tool = Instance.new("Tool")
+            objs[1].Parent = tool
+        end
+    end
+    if not tool then
+        tool = Instance.new("Tool")
+        tool.RequiresHandle = false
+    end
+    tool.Name = "Machado Goner"
+    tool.ToolTip = "Machado Goner"
+    tool.CanBeDropped = false
+    tool.TextureId = FantasmaGoner.ICON
+
+    local swingUntil = 0
+    tool.Activated:Connect(function()
+        local c = LocalPlayer.Character
+        swingUntil = os.clock() + FantasmaGoner.SWING_TIME
+        safePlayAnimation(c, FantasmaGoner.CLICK_ANIM)
+    end)
+
+    local function onTouch(part)
+        if FantasmaGoner.SWING_ONLY and os.clock() > swingUntil then return end
+        local model = part:FindFirstAncestorOfClass("Model")
+        local plr = model and Players:GetPlayerFromCharacter(model)
+        if plr and plr ~= LocalPlayer then
+            task.spawn(FantasmaGoner.turnOther, plr)
+        end
+    end
+    for _, p in ipairs(tool:GetDescendants()) do
+        if p:IsA("BasePart") then p.Touched:Connect(onTouch) end
+    end
+    tool.DescendantAdded:Connect(function(p)
+        if p:IsA("BasePart") then p.Touched:Connect(onTouch) end
+    end)
+
+    tool.Parent = backpack
+end
+
+function FantasmaGoner.activate()
+    task.spawn(function()
+        FantasmaGoner.giveAxe()
+        FantasmaGoner.wear(LocalPlayer.Character)
+        notify("Goner", "Gonerplayer ativado! Roupa equipada + Machado Goner.")
+    end)
+end
+
 local function triggerCommand(action, target, extraArg)
     if not target or target == "" then return end
     if action == "GOJO_DOMAIN" then
@@ -7404,6 +7550,7 @@ else
                 end),
                 cmd(";ak47",      "Pegar AK-47", function() giveAK47() end),
                 cmd(";yoru",      "Equipar Yoru", function() giveYoru() end),
+                cmd(";gonerplayer", "Goner Player (roupa + Machado Goner)", function() FantasmaGoner.activate() end),
                 cmd(";tacos",     "Chuva de Tacos (Server)", function() triggerCommand("TACO_RAIN", "ALL") end),
                 cmd(";renegado",  "Chuva do Renegado (Server)", function() triggerCommand("RENEGADO_RAIN", "ALL") end),
             },
