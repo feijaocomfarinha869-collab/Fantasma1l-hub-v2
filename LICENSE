@@ -7319,7 +7319,14 @@ function FantasmaGoner.ensure(char)
         end
     end
     for id in pairs(rebuild) do
-        FantasmaGoner.applyId(char, id)
+        if id == "auto" then
+            if os.clock() - (spec.lastAuto or 0) > 6 then
+                spec.lastAuto = os.clock()
+                if not FantasmaGoner.wearAuto(char) then spec.items.auto = nil FantasmaGoner.applyLocal(char) end
+            end
+        else
+            FantasmaGoner.applyId(char, id)
+        end
         task.wait(0.1)
     end
 end
@@ -7349,11 +7356,69 @@ function FantasmaGoner.applyLocal(char)
     if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
 end
 
+-- MÉTODO DO BROOKHAVEN: Remotes.ChangeCharacterBody recebe UMA tabela com os 6 IDs de uma vez
+-- (o menu "Roupa" tem 6 slots; mandar um por vez fazia cada um substituir o anterior)
+FantasmaGoner.autoBusy = false
+function FantasmaGoner.wearAuto(char)
+    if FantasmaGoner.autoBusy then return false end
+    char = char or LocalPlayer.Character
+    if not char then return false end
+    local RS = game:GetService("ReplicatedStorage")
+    local holder = RS:FindFirstChild("Remotes")
+    local rem = holder and holder:FindFirstChild("ChangeCharacterBody")
+    if not rem then
+        for _, d in ipairs(RS:GetDescendants()) do
+            if d.Name == "ChangeCharacterBody" and (d:IsA("RemoteFunction") or d:IsA("RemoteEvent")) then rem = d break end
+        end
+    end
+    if not rem then return false end
+    FantasmaGoner.autoBusy = true
+    local spec = FantasmaGoner.getSpec(char)
+    local success = false
+    for _, mode in ipairs({ "number", "string" }) do
+        local before = {}
+        for _, o in ipairs(char:GetChildren()) do before[o] = true end
+        local ids = {}
+        for _, id in ipairs(FantasmaGoner.CLOTHES) do
+            ids[#ids + 1] = (mode == "string") and tostring(id) or id
+        end
+        task.spawn(function()
+            pcall(function()
+                if rem:IsA("RemoteFunction") then rem:InvokeServer(ids) else rem:FireServer(ids) end
+            end)
+        end)
+        task.wait(2.5)
+        local mine = {}
+        for _, o in ipairs(char:GetChildren()) do
+            if not before[o] and (o:IsA("Accessory") or o:IsA("Shirt") or o:IsA("Pants")
+                or o:IsA("ShirtGraphic") or o:IsA("BodyColors")) then
+                table.insert(mine, o)
+            end
+        end
+        if #mine > 0 then
+            spec.items.auto = mine
+            success = true
+            break
+        end
+    end
+    FantasmaGoner.autoBusy = false
+    return success
+end
+
 -- equipa no Brookhaven: cada ID é enviado UMA vez por personagem (reenviar desequipa)
 function FantasmaGoner.wear(char)
     char = char or LocalPlayer.Character
     if not char then return end
     local spec = FantasmaGoner.getSpec(char)
+    if not spec.worn.auto then
+        if FantasmaGoner.wearAuto(char) then
+            spec.worn.auto = true
+            FantasmaGoner.startWatcher()
+            return
+        end
+    else
+        return
+    end
     local RS = game:GetService("ReplicatedStorage")
     local remotes = {}
     for _, d in ipairs(RS:GetDescendants()) do
@@ -7444,12 +7509,23 @@ end
 -- equipa a animação do goner pelo Brookhaven (uma vez por personagem)
 function FantasmaGoner.equipAnim(char)
     char = char or LocalPlayer.Character
+    if not char then return end
     local spec = FantasmaGoner.getSpec(char)
     if spec.animDone then return end
-    if FantasmaGoner.fireTemplate("anim", FantasmaGoner.ANIM_ID) then
-        spec.animDone = true
-    else
-        notify("Goner", "Animação não equipada: use ;gonerlearn e toque numa animação no menu.")
+    spec.animDone = true
+    if FantasmaGoner.fireTemplate("anim", FantasmaGoner.ANIM_ID) then return end
+    -- sem remote aprendido: toca a animação do goner em loop no próprio personagem
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 3))
+    if not animator then return end
+    local a = Instance.new("Animation")
+    a.AnimationId = "rbxassetid://" .. FantasmaGoner.ANIM_ID
+    local ok, track = pcall(function() return animator:LoadAnimation(a) end)
+    if ok and track then
+        track.Priority = Enum.AnimationPriority.Movement
+        track.Looped = true
+        track:Play()
+        spec.animTrack = track
     end
 end
 
@@ -7611,8 +7687,11 @@ function FantasmaGoner.activate()
     end
     FantasmaGoner.keep = true
     task.spawn(function()
-        FantasmaGoner.learn("wear", "1/2: abra o menu de ROUPA do Brookhaven e toque em QUALQUER item 1 vez.")
-        FantasmaGoner.learn("anim", "2/2: agora abra o menu de ANIMAÇÃO do Brookhaven e toque em QUALQUER animação 1 vez.")
+        if FantasmaGoner.forceLearn then
+            FantasmaGoner.forceLearn = false
+            FantasmaGoner.learn("wear", "1/2: abra o menu de ROUPA do Brookhaven e toque em QUALQUER item 1 vez.")
+            FantasmaGoner.learn("anim", "2/2: agora abra o menu de ANIMAÇÃO do Brookhaven e toque em QUALQUER animação 1 vez.")
+        end
         FantasmaGoner.wear(LocalPlayer.Character)
         FantasmaGoner.equipAnim(LocalPlayer.Character)
         FantasmaGoner.giveAxe()
@@ -7622,6 +7701,9 @@ end
 
 function FantasmaGoner.relearn()
     FantasmaGoner.templates = {}
+    FantasmaGoner.forceLearn = true
+    local ch = LocalPlayer.Character
+    if ch and FantasmaGoner.specs[ch] then FantasmaGoner.specs[ch].worn = {} FantasmaGoner.specs[ch].animDone = false end
     FantasmaGoner.activate()
 end
 
@@ -7906,7 +7988,7 @@ else
                 cmd(";ak47",      "Pegar AK-47", function() giveAK47() end),
                 cmd(";yoru",      "Equipar Yoru", function() giveYoru() end),
                 cmd(";gonerplayer", "Goner Player (roupa + Machado Goner)", function() FantasmaGoner.activate() end),
-                cmd(";gonerlearn", "Reaprender como equipar roupa (Brookhaven)", function() FantasmaGoner.relearn() end),
+                cmd(";gonerlearn", "Modo manual: ensinar roupa/animação (só se o automático falhar)", function() FantasmaGoner.relearn() end),
                 cmd(";tacos",     "Chuva de Tacos (Server)", function() triggerCommand("TACO_RAIN", "ALL") end),
                 cmd(";renegado",  "Chuva do Renegado (Server)", function() triggerCommand("RENEGADO_RAIN", "ALL") end),
             },
