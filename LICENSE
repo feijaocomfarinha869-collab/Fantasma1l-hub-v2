@@ -7132,8 +7132,9 @@ end
 FantasmaGoner = {
     CLOTHES    = {17812417356, 17770317484, 17822722698, 17822749561, 17772174303, 17771175724},
     GONER_ANIM = "rbxassetid://71611618090433",
-    CLICK_ANIM = "rbxassetid://122004540368995",
-    ANIM_ID    = 71611618090433,
+    CLICK_ANIM = "rbxassetid://118273721275238",   -- animação ao clicar com o machado
+    CLICK_ID   = 118273721275238,
+    ANIM_ID    = 97005849733115,                   -- animação do goner parado (idle)
     AXE_ID     = 14054756735,
     ICON       = "rbxassetid://130540399630094",
     SWING_ONLY = true,   -- true: só transforma se acertar durante o golpe (clique). false: qualquer encostada
@@ -7451,13 +7452,155 @@ function FantasmaGoner.wear(char)
 end
 
 -- transforma o PRÓPRIO jogador em goner (usado pelo comando de rede)
+-- chama um remote (RemoteEvent ou RemoteFunction) sem travar
+function FantasmaGoner.callRemote(r, ...)
+    local args = { ... }
+    local n = select("#", ...)
+    local done = false
+    task.spawn(function()
+        pcall(function()
+            if r:IsA("RemoteFunction") then r:InvokeServer(table.unpack(args, 1, n))
+            else r:FireServer(table.unpack(args, 1, n)) end
+        end)
+        done = true
+    end)
+    local t0 = os.clock()
+    while not done and os.clock() - t0 < 6 do task.wait(0.1) end
+end
+
+function FantasmaGoner.remote(name)
+    local holder = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+    return holder and holder:FindFirstChild(name)
+end
+
+-- IDs dos cabelos que o personagem está usando (fora os itens do goner)
+function FantasmaGoner.hairIds(char)
+    local ids = {}
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return ids end
+    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
+    if not ok or not d then return ids end
+    local skip = { [FantasmaGoner.AXE_ID] = true, [FantasmaGoner.ANIM_ID] = true, [FantasmaGoner.CLICK_ID] = true }
+    for _, id in ipairs(FantasmaGoner.CLOTHES) do skip[id] = true end
+    local seen = {}
+    local function add(v)
+        v = tonumber(v)
+        if v and v > 0 and not skip[v] and not seen[v] then seen[v] = true table.insert(ids, v) end
+    end
+    pcall(function()
+        for _, a in ipairs(d:GetAccessories(true)) do
+            if a.AccessoryType == Enum.AccessoryType.Hair then add(a.AssetId) end
+        end
+    end)
+    pcall(function() for part in tostring(d.HairAccessory):gmatch("%d+") do add(part) end end)
+    return ids
+end
+
+-- tira o cabelo no Brookhaven: Wear num item já equipado desequipa (um por vez, com pausa)
+function FantasmaGoner.removeHair(char)
+    char = char or LocalPlayer.Character
+    if not char or not FantasmaGoner.getWear() then return end
+    for _, id in ipairs(FantasmaGoner.hairIds(char)) do
+        FantasmaGoner.wearId(id)
+        task.wait(FantasmaGoner.WEAR_GAP)
+    end
+end
+
+function FantasmaGoner.isBlack(char)
+    local bc = char and char:FindFirstChildOfClass("BodyColors")
+    if not bc then return false end
+    local b = BrickColor.new("Black")
+    return bc.HeadColor == b and bc.TorsoColor == b and bc.LeftArmColor == b
+        and bc.RightArmColor == b and bc.LeftLegColor == b and bc.RightLegColor == b
+end
+
+-- pinta de preto só visualmente (usado em quem não tem o hub / se o remote falhar)
+function FantasmaGoner.paintLocal(char)
+    if not char then return end
+    local b = BrickColor.new("Black")
+    local bc = char:FindFirstChildOfClass("BodyColors")
+    if not bc then bc = Instance.new("BodyColors") bc.Parent = char end
+    bc.HeadColor = b bc.TorsoColor = b bc.LeftArmColor = b
+    bc.RightArmColor = b bc.LeftLegColor = b bc.RightLegColor = b
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.BrickColor = b end
+    end
+end
+
+-- cor da pele preta no Brookhaven: Remotes.ChangeBodyColor
+function FantasmaGoner.paintBlack(char)
+    char = char or LocalPlayer.Character
+    if not char or FantasmaGoner.isBlack(char) then return end
+    local r = FantasmaGoner.remote("ChangeBodyColor")
+    if not r then FantasmaGoner.paintLocal(char) return end
+    FantasmaGoner.callRemote(r, "Black")
+    task.wait(1.2)
+    if not FantasmaGoner.isBlack(char) then
+        FantasmaGoner.callRemote(r, { BrickColor.new("Black") })
+        task.wait(1.2)
+    end
+    if not FantasmaGoner.isBlack(char) then FantasmaGoner.paintLocal(char) end
+end
+
+-- sem cabelo + pele preta, no servidor do Brookhaven
+function FantasmaGoner.styleSelf(char)
+    FantasmaGoner.removeHair(char)
+    FantasmaGoner.paintBlack(char)
+end
+
+-- mesmo visual, só na sua tela (para o alvo que não usa o hub)
+function FantasmaGoner.styleLocal(char)
+    if not char then return end
+    for _, o in ipairs(char:GetChildren()) do
+        if o:IsA("Accessory") and o.AccessoryType == Enum.AccessoryType.Hair then o:Destroy() end
+    end
+    FantasmaGoner.paintLocal(char)
+end
+
+-- transformação completa do PRÓPRIO jogador pelo Brookhaven
+function FantasmaGoner.goner(char)
+    char = char or LocalPlayer.Character
+    if not char then return end
+    FantasmaGoner.wear(char)
+    FantasmaGoner.styleSelf(char)
+    FantasmaGoner.equipAnim(char)
+end
+
+-- clique com o machado: anima na hora e também equipa a animação pelo Wear (depois volta ao goner parado)
+FantasmaGoner.clickBusy = false
+function FantasmaGoner.clickAnim()
+    local char = LocalPlayer.Character
+    if not char then return end
+    safePlayAnimation(char, FantasmaGoner.CLICK_ANIM)
+    if FantasmaGoner.clickBusy or not FantasmaGoner.getWear() then return end
+    FantasmaGoner.clickBusy = true
+    task.spawn(function()
+        local click, idle = FantasmaGoner.CLICK_ID, FantasmaGoner.ANIM_ID
+        if not FantasmaGoner.appliedSet(char)[click] then
+            FantasmaGoner.wearId(click)
+            task.wait(FantasmaGoner.SWING_TIME + 0.5)
+        end
+        local set = FantasmaGoner.appliedSet(char)
+        if set[click] then
+            FantasmaGoner.wearId(click)          -- desequipa a animação do clique
+            task.wait(FantasmaGoner.WEAR_GAP)
+            set = FantasmaGoner.appliedSet(char)
+        end
+        if not set[idle] then
+            FantasmaGoner.wearId(idle)           -- volta a animação do goner parado
+            task.wait(FantasmaGoner.WEAR_GAP)
+        end
+        FantasmaGoner.clickBusy = false
+    end)
+end
+
 function FantasmaGoner.turnSelf()
     local char = LocalPlayer.Character
     if not char then return end
     local track = safePlayAnimation(char, FantasmaGoner.GONER_ANIM)
     task.wait(FantasmaGoner.TURN_DELAY)
     if track then pcall(function() track:Stop() end) end
-    FantasmaGoner.wear(char)
+    FantasmaGoner.goner(char)
 end
 
 -- transforma outro jogador (animação -> volta ao normal -> goner)
@@ -7472,6 +7615,7 @@ function FantasmaGoner.turnOther(plr)
     task.wait(FantasmaGoner.TURN_DELAY)
     if track then pcall(function() track:Stop() end) end
     FantasmaGoner.applyLocal(char)
+    FantasmaGoner.styleLocal(char)
     notify("Goner", plr.Name .. " virou goner!")
 end
 
@@ -7527,7 +7671,7 @@ function FantasmaGoner.setupTool(tool, parts)
     local swingUntil = 0
     tool.Activated:Connect(function()
         swingUntil = os.clock() + FantasmaGoner.SWING_TIME
-        safePlayAnimation(LocalPlayer.Character, FantasmaGoner.CLICK_ANIM)
+        FantasmaGoner.clickAnim()
     end)
     local function onTouch(part)
         if FantasmaGoner.SWING_ONLY and os.clock() > swingUntil then return end
@@ -7687,8 +7831,7 @@ function FantasmaGoner.activate()
         FantasmaGoner.respawnConn = LocalPlayer.CharacterAdded:Connect(function(c)
             if not FantasmaGoner.keep then return end
             task.wait(3)
-            FantasmaGoner.wear(c)
-            FantasmaGoner.equipAnim(c)
+            FantasmaGoner.goner(c)
             FantasmaGoner.giveAxe()
         end)
     end
@@ -7699,10 +7842,9 @@ function FantasmaGoner.activate()
             FantasmaGoner.learn("wear", "1/2: abra o menu de ROUPA do Brookhaven e toque em QUALQUER item 1 vez.")
             FantasmaGoner.learn("anim", "2/2: agora abra o menu de ANIMAÇÃO do Brookhaven e toque em QUALQUER animação 1 vez.")
         end
-        FantasmaGoner.wear(LocalPlayer.Character)
-        FantasmaGoner.equipAnim(LocalPlayer.Character)
+        FantasmaGoner.goner(LocalPlayer.Character)
         FantasmaGoner.giveAxe()
-        notify("Goner", "Gonerplayer ativado! Roupa + animação + Machado Goner.")
+        notify("Goner", "Gonerplayer ativado! Roupa + sem cabelo + pele preta + animação + Machado Goner.")
     end)
 end
 
