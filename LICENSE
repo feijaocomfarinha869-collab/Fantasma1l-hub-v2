@@ -57,15 +57,7 @@ if entry then
     MY_ROLE = entry.Role
 end
 
-print("[Fantasma1l Hub] Modo: " .. (IS_ADMIN and ("ADMIN - " .. MY_ROLE) or "Brookhaven Only"))
-
-pcall(function()
-    StarterGui:SetCore("SendNotification", {
-        Title = "Fantasma1l Hub",
-        Text = IS_ADMIN and (MY_ROLE) or "Brookhaven RP Edition",
-        Duration = 5
-    })
-end)
+if IS_ADMIN then print("[Fantasma1l Hub] Modo: ADMIN - " .. MY_ROLE) end
 
 -- ================== IDs ==================
 local ICON_ID          = "rbxassetid://72455921762458"
@@ -230,75 +222,270 @@ local function sendNetCmd(cmd)
 end
 
 -- ================== TAG ==================
-function applyOverheadTag(player)
+-- Regras:
+--  * usuário comum NÃO vê a própria tag e não recebe mensagem nenhuma ao abrir o hub
+--    (só recebe aviso se tiver DONO / SUB DONO / ADM no servidor);
+--  * usuário vê a tag dos admins; admin vê a tag de todo mundo que usa o hub (e a própria).
+FantasmaTag = { enabled = true, colorIdx = nil, peers = {}, hooked = {}, aliases = {}, usedAlias = {}, wl = {}, lastAnnounce = 0 }
+for name, data in pairs(WHITELIST) do FantasmaTag.wl[string.lower(name)] = data.Role end
+
+FantasmaTag.PRESETS = {
+    { name = "Roxo → Azul",        a = Color3.fromRGB(168, 85, 247), b = Color3.fromRGB(59, 130, 246) },
+    { name = "Dourado brilhante",  gold = true },
+    { name = "Vermelho → Laranja", a = Color3.fromRGB(239, 68, 68),  b = Color3.fromRGB(251, 146, 60) },
+    { name = "Verde → Ciano",      a = Color3.fromRGB(34, 197, 94),  b = Color3.fromRGB(6, 182, 212) },
+    { name = "Rosa → Roxo",        a = Color3.fromRGB(236, 72, 153), b = Color3.fromRGB(139, 92, 246) },
+    { name = "Azul → Ciano",       a = Color3.fromRGB(37, 99, 235),  b = Color3.fromRGB(34, 211, 238) },
+    { name = "Branco → Cinza",     a = Color3.fromRGB(255, 255, 255), b = Color3.fromRGB(148, 163, 184) },
+}
+
+function FantasmaTag.presetNames()
+    local t = {}
+    for _, pr in ipairs(FantasmaTag.PRESETS) do table.insert(t, pr.name) end
+    return t
+end
+function FantasmaTag.indexOf(name)
+    for i, pr in ipairs(FantasmaTag.PRESETS) do if pr.name == name then return i end end
+    return 1
+end
+function FantasmaTag.roleOf(name) return FantasmaTag.wl[string.lower(name or "")] end
+function FantasmaTag.myColor() return FantasmaTag.colorIdx or (IS_ADMIN and 2 or 1) end
+function FantasmaTag.colorOf(player)
+    if player == LocalPlayer then return FantasmaTag.myColor() end
+    local peer = FantasmaTag.peers[player.Name]
+    if peer and peer.color and FantasmaTag.PRESETS[peer.color] then return peer.color end
+    return FantasmaTag.roleOf(player.Name) and 2 or 1
+end
+
+function FantasmaTag.shouldShow(player)
+    if not FantasmaTag.enabled then return false end
+    if player == LocalPlayer then return IS_ADMIN end          -- usuário não vê a própria tag
+    if not activeScriptUsers[player.Name] then return false end
+    local peer = FantasmaTag.peers[player.Name]
+    if peer and peer.off then return false end                 -- a pessoa desligou a tag dela
+    if IS_ADMIN then return true end                           -- admin vê todos
+    return FantasmaTag.roleOf(player.Name) ~= nil              -- usuário só vê admins
+end
+
+function FantasmaTag.remove(player)
+    local ch = player and player.Character
+    local head = ch and ch:FindFirstChild("Head")
+    local old = head and head:FindFirstChild("FantasmaOverhead")
+    if old then old:Destroy() end
+end
+
+function FantasmaTag.seq(...)
+    local kp = {}
+    for _, v in ipairs({ ... }) do table.insert(kp, ColorSequenceKeypoint.new(v[1], v[2])) end
+    return ColorSequence.new(kp)
+end
+
+function FantasmaTag.build(player)
     pcall(function()
-        if not player or not player.Character then return end
-        local head = player.Character:WaitForChild("Head", 3)
+        local ch = player.Character
+        local head = ch and (ch:FindFirstChild("Head") or ch:WaitForChild("Head", 3))
         if not head then return end
-        if head:FindFirstChild("FantasmaOverhead") then head.FantasmaOverhead:Destroy() end
+        local old = head:FindFirstChild("FantasmaOverhead")
+        if old then old:Destroy() end
 
-        local cargo = "USUARIO"
-        if WHITELIST[player.Name] then cargo = WHITELIST[player.Name].Role
-        elseif NETWORK_ROLES[player.Name] then cargo = NETWORK_ROLES[player.Name] end
-        if player == LocalPlayer then cargo = cargo .. " (VOCÊ)" end
+        local pr = FantasmaTag.PRESETS[FantasmaTag.colorOf(player)] or FantasmaTag.PRESETS[1]
+        local role = (player == LocalPlayer and IS_ADMIN) and MY_ROLE or FantasmaTag.roleOf(player.Name)
+        local text = role and ("FANTASMA1L • " .. role) or "Fantasma1l usuário"
 
-        local bb = Instance.new("BillboardGui", head)
-        bb.Name, bb.Size, bb.StudsOffset, bb.AlwaysOnTop = "FantasmaOverhead", UDim2.new(0, 240, 0, 50), Vector3.new(0, 3, 0), true
+        -- cores (dourado = preto + ouro brilhante | demais = degradê)
+        local fillSeq, edgeSeq, textSeq, glow
+        if pr.gold then
+            fillSeq = FantasmaTag.seq({ 0, Color3.fromRGB(0, 0, 0) }, { 0.5, Color3.fromRGB(34, 26, 6) }, { 1, Color3.fromRGB(0, 0, 0) })
+            edgeSeq = FantasmaTag.seq({ 0, Color3.fromRGB(184, 134, 11) }, { 0.35, Color3.fromRGB(255, 215, 0) },
+                { 0.5, Color3.fromRGB(255, 250, 200) }, { 0.65, Color3.fromRGB(255, 215, 0) }, { 1, Color3.fromRGB(184, 134, 11) })
+            textSeq = edgeSeq
+            glow = Color3.fromRGB(255, 200, 40)
+        else
+            fillSeq = FantasmaTag.seq({ 0, pr.a:Lerp(Color3.new(0, 0, 0), 0.62) }, { 1, pr.b:Lerp(Color3.new(0, 0, 0), 0.62) })
+            edgeSeq = FantasmaTag.seq({ 0, pr.a }, { 1, pr.b })
+            textSeq = FantasmaTag.seq({ 0, pr.a:Lerp(Color3.new(1, 1, 1), 0.35) }, { 1, pr.b:Lerp(Color3.new(1, 1, 1), 0.35) })
+            glow = pr.a
+        end
+
+        local bb = Instance.new("BillboardGui")
+        bb.Name, bb.Adornee = "FantasmaOverhead", head
+        bb.Size, bb.StudsOffset = UDim2.new(0, 268, 0, 62), Vector3.new(0, 3.4, 0)
+        bb.AlwaysOnTop, bb.MaxDistance, bb.LightInfluence = true, 160, 0
+
+        -- brilho (glow) atrás do cartão
+        local gl = Instance.new("Frame", bb)
+        gl.Size, gl.BackgroundTransparency = UDim2.fromScale(1, 1), 1
+        Instance.new("UICorner", gl).CornerRadius = UDim.new(0, 18)
+        local gs = Instance.new("UIStroke", gl)
+        gs.Color, gs.Thickness, gs.Transparency = glow, 5, 0.72
 
         local fr = Instance.new("Frame", bb)
-        fr.Size, fr.BackgroundColor3 = UDim2.new(1, 0, 1, 0), Color3.fromRGB(15, 12, 22)
-        fr.BackgroundTransparency, fr.BorderSizePixel = 0.25, 0
-        Instance.new("UICorner", fr).CornerRadius = UDim.new(0, 8)
+        fr.Position, fr.Size = UDim2.new(0, 6, 0, 6), UDim2.new(1, -12, 1, -12)
+        fr.BackgroundColor3, fr.BackgroundTransparency, fr.BorderSizePixel = Color3.new(1, 1, 1), 0.05, 0
+        Instance.new("UICorner", fr).CornerRadius = UDim.new(0, 14)
+        local fg = Instance.new("UIGradient", fr)
+        fg.Color, fg.Rotation = fillSeq, 20
 
         local st = Instance.new("UIStroke", fr)
-        st.Color, st.Thickness = Color3.fromRGB(168, 85, 247), 1.8
+        st.Thickness, st.Color = 2.2, Color3.new(1, 1, 1)
+        local sg = Instance.new("UIGradient", st)
+        sg.Color = edgeSeq
 
-        local ic = Instance.new("ImageLabel", fr)
-        ic.Size, ic.Position, ic.BackgroundTransparency, ic.Image = UDim2.new(0, 32, 0, 32), UDim2.new(0, 8, 0.5, -16), 1, ICON_ID
-        task.spawn(function()
-            local r = resolveImage(ICON_ID)
-            if ic.Parent then ic.Image = r end
-        end)
+        -- foto de perfil do jogador
+        local av = Instance.new("ImageLabel", fr)
+        av.Size, av.Position, av.BackgroundColor3 = UDim2.new(0, 36, 0, 36), UDim2.new(0, 8, 0.5, -18), Color3.fromRGB(20, 20, 28)
+        av.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
+        Instance.new("UICorner", av).CornerRadius = UDim.new(1, 0)
+        local avs = Instance.new("UIStroke", av)
+        avs.Thickness, avs.Color = 1.8, Color3.new(1, 1, 1)
+        Instance.new("UIGradient", avs).Color = edgeSeq
 
         local lbl = Instance.new("TextLabel", fr)
-        lbl.Size, lbl.Position, lbl.BackgroundTransparency = UDim2.new(1, -50, 1, 0), UDim2.new(0, 45, 0, 0), 1
-        lbl.Text = "FANTASMA1L | " .. cargo
-        lbl.TextColor3, lbl.TextSize = Color3.fromRGB(220, 200, 255), 13
-        lbl.Font, lbl.TextXAlignment = Enum.Font.GothamBold, Enum.TextXAlignment.Left
+        lbl.Size, lbl.Position, lbl.BackgroundTransparency = UDim2.new(1, -58, 1, 0), UDim2.new(0, 52, 0, 0), 1
+        lbl.Text, lbl.TextColor3, lbl.TextSize = text, Color3.new(1, 1, 1), role and 15 or 16
+        lbl.Font, lbl.TextXAlignment, lbl.TextTruncate = Enum.Font.GothamBlack, Enum.TextXAlignment.Left, Enum.TextTruncate.AtEnd
+        local lg = Instance.new("UIGradient", lbl)
+        lg.Color = textSeq
+
+        -- brilho correndo (só no dourado, leve: 2 tweens por tag)
+        if pr.gold then
+            local TS = game:GetService("TweenService")
+            local info = TweenInfo.new(2.4, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1)
+            sg.Offset, lg.Offset = Vector2.new(-1, 0), Vector2.new(-1, 0)
+            TS:Create(sg, info, { Offset = Vector2.new(1, 0) }):Play()
+            TS:Create(lg, info, { Offset = Vector2.new(1, 0) }):Play()
+        end
+
+        bb.Parent = head
     end)
 end
 
-local function setupPlayerTag(plr)
-    plr.CharacterAdded:Connect(function()
-        task.wait(1)
-        if plr == LocalPlayer then applyOverheadTag(plr)
-        elseif IS_ADMIN and activeScriptUsers[plr.Name] then applyOverheadTag(plr) end
-    end)
-    if plr.Character then
-        if plr == LocalPlayer then applyOverheadTag(plr)
-        elseif IS_ADMIN and activeScriptUsers[plr.Name] then applyOverheadTag(plr) end
-    end
+function FantasmaTag.refresh(player)
+    if not player then return end
+    if FantasmaTag.shouldShow(player) then FantasmaTag.build(player) else FantasmaTag.remove(player) end
 end
-setupPlayerTag(LocalPlayer)
+function FantasmaTag.refreshByName(name)
+    local p = Players:FindFirstChild(name)
+    if p then FantasmaTag.refresh(p) end
+end
+function FantasmaTag.refreshAll()
+    for _, p in ipairs(Players:GetPlayers()) do FantasmaTag.refresh(p) end
+end
 
-if IS_ADMIN then
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            p.CharacterAdded:Connect(function()
-                task.wait(1.5)
-                if activeScriptUsers[p.Name] then applyOverheadTag(p) end
-            end)
-            if p.Character and activeScriptUsers[p.Name] then applyOverheadTag(p) end
+function FantasmaTag.hook(player)
+    if FantasmaTag.hooked[player] then return end
+    FantasmaTag.hooked[player] = true
+    player.CharacterAdded:Connect(function()
+        task.wait(1.2)
+        FantasmaTag.refresh(player)
+    end)
+    if player.Character then FantasmaTag.refresh(player) end
+end
+
+-- avisa a rede (cargo é conferido pelo NOME de quem enviou, então não dá para forjar)
+function FantasmaTag.announce(force)
+    local now = os.clock()
+    if not force and now - FantasmaTag.lastAnnounce < 2 then return end
+    FantasmaTag.lastAnnounce = now
+    sendNetCmd(";PONG " .. LocalPlayer.Name .. " COL_" .. FantasmaTag.myColor() .. " TAG_" .. (FantasmaTag.enabled and 1 or 0))
+end
+
+function FantasmaTag.setEnabled(v)
+    FantasmaTag.enabled = v and true or false
+    FantasmaTag.refreshAll()
+    FantasmaTag.announce(true)
+end
+function FantasmaTag.setColor(idx)
+    if not FantasmaTag.PRESETS[idx] then return end
+    FantasmaTag.colorIdx = idx
+    FantasmaTag.refreshAll()
+    FantasmaTag.announce(true)
+end
+
+-- nome falso fixo por jogador: Fantasma1lhub_1234
+function FantasmaTag.alias(name)
+    if FantasmaTag.aliases[name] then return FantasmaTag.aliases[name] end
+    local n
+    repeat n = math.random(1000, 9999) until not FantasmaTag.usedAlias[n]
+    FantasmaTag.usedAlias[n] = true
+    FantasmaTag.aliases[name] = "Fantasma1lhub_" .. n
+    return FantasmaTag.aliases[name]
+end
+
+-- ;verificar -> lista só os apelidos de quem está usando o hub
+function FantasmaTag.verify()
+    sendNetCmd(";PING ALL")
+    task.wait(2.5)
+    local list = {}
+    for n in pairs(activeScriptUsers) do
+        if Players:FindFirstChild(n) then table.insert(list, FantasmaTag.alias(n)) end
+    end
+    table.sort(list)
+    notify("Hub", table.concat(list, "\n"))
+end
+
+-- aviso de início: usuário comum só recebe se houver DONO / SUB DONO / ADM no servidor
+function FantasmaTag.notice(text)
+    pcall(function() StarterGui:SetCore("SendNotification", { Title = "Fantasma1l Hub", Text = text, Duration = 5 }) end)
+end
+task.spawn(function()
+    if IS_ADMIN then FantasmaTag.notice(MY_ROLE) return end
+    task.wait(2)
+    for _, p in ipairs(Players:GetPlayers()) do
+        local r = p ~= LocalPlayer and FantasmaTag.roleOf(p.Name)
+        if r then FantasmaTag.notice("Hub ativo • " .. r .. " no servidor") break end
+    end
+end)
+Players.PlayerAdded:Connect(function(p)
+    FantasmaTag.hook(p)
+    if not IS_ADMIN then
+        local r = FantasmaTag.roleOf(p.Name)
+        if r then task.wait(1.5) FantasmaTag.notice("Hub ativo • " .. r .. " entrou no servidor") end
+    end
+end)
+Players.PlayerRemoving:Connect(function(p)
+    FantasmaTag.peers[p.Name] = nil
+    FantasmaTag.hooked[p] = nil
+    activeScriptUsers[p.Name] = nil
+end)
+for _, p in ipairs(Players:GetPlayers()) do FantasmaTag.hook(p) end
+
+-- ================== ANTI-LAG (desempenho) ==================
+FantasmaPerf = { level = "Desligado", saved = nil }
+function FantasmaPerf.save()
+    if FantasmaPerf.saved then return end
+    local sv = { shadows = Lighting.GlobalShadows, fx = {} }
+    pcall(function() sv.quality = settings().Rendering.QualityLevel end)
+    for _, e in ipairs(Lighting:GetChildren()) do
+        if e:IsA("BloomEffect") or e:IsA("BlurEffect") or e:IsA("SunRaysEffect") or e:IsA("DepthOfFieldEffect") then
+            sv.fx[e] = e.Enabled
         end
     end
-    Players.PlayerAdded:Connect(function(p)
-        if p ~= LocalPlayer then
-            p.CharacterAdded:Connect(function()
-                task.wait(1.5)
-                if activeScriptUsers[p.Name] then applyOverheadTag(p) end
-            end)
-        end
-    end)
+    local t = workspace:FindFirstChildOfClass("Terrain")
+    if t then sv.deco = t.Decoration end
+    FantasmaPerf.saved = sv
+end
+function FantasmaPerf.set(level)
+    FantasmaPerf.save()
+    local sv = FantasmaPerf.saved
+    FantasmaPerf.level = level
+    local t = workspace:FindFirstChildOfClass("Terrain")
+    if level == "Desligado" then
+        pcall(function() Lighting.GlobalShadows = sv.shadows end)
+        for e, v in pairs(sv.fx) do if e.Parent then e.Enabled = v end end
+        if t and sv.deco ~= nil then pcall(function() t.Decoration = sv.deco end) end
+        if sv.quality then pcall(function() settings().Rendering.QualityLevel = sv.quality end) end
+        return
+    end
+    -- Leve / Forte: só reduz gráficos do mapa (nenhuma função do hub é removida)
+    pcall(function() Lighting.GlobalShadows = false end)
+    for e in pairs(sv.fx) do if e.Parent then e.Enabled = false end end
+    if level == "Forte" then
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+        if t then pcall(function() t.Decoration = false end) end
+    else
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level05 end)
+    end
 end
 
 -- ================== C00LKIDD EFFECT ==================
@@ -6794,14 +6981,40 @@ function processNetMessage(msg, senderName)
     local extraArg = parts[3] and table.concat(parts, " ", 3) or nil
 
     if action == "PING" then
-        local role = (WHITELIST[LocalPlayer.Name] and WHITELIST[LocalPlayer.Name].Role) or "USER"
-        sendNetCmd(";PONG " .. LocalPlayer.Name .. " ROLE_" .. role)
+        if senderName and senderName ~= LocalPlayer.Name then
+            activeScriptUsers[senderName] = true
+            FantasmaTag.refreshByName(senderName)
+        end
+        FantasmaTag.announce()
     elseif action == "PONG" and target then
-        activeScriptUsers[target] = true
-        local roleExtra = parts[3] or "ROLE_USER"
-        NETWORK_ROLES[target] = roleExtra:gsub("ROLE_", "")
-        local pt = Players:FindFirstChild(target)
-        if pt and IS_ADMIN then applyOverheadTag(pt) end
+        -- só vale se quem mandou é mesmo o jogador citado (evita forjar)
+        if senderName == target and target ~= LocalPlayer.Name then
+            activeScriptUsers[target] = true
+            local peer = FantasmaTag.peers[target] or {}
+            FantasmaTag.peers[target] = peer
+            for _, part in ipairs(parts) do
+                local c = part:match("^COL_(%d+)$")
+                if c then peer.color = tonumber(c) end
+                local t = part:match("^TAG_(%d)$")
+                if t then peer.off = (t == "0") end
+            end
+            FantasmaTag.refreshByName(target)
+        end
+    end
+
+    -- comandos digitados por mim mesmo (admin)
+    if senderName == LocalPlayer.Name and IS_ADMIN then
+        if action == "VERIFICAR" or action == "VERIFY" then
+            task.spawn(FantasmaTag.verify)
+            return
+        elseif action == "TAG" then
+            local v = string.lower(target or "")
+            FantasmaTag.setEnabled(not (v == "off" or v == "0" or v == "desligar"))
+            return
+        elseif action == "TAGCOR" then
+            FantasmaTag.setColor(tonumber(target) or 1)
+            return
+        end
     end
 
     if action ~= "PING" and action ~= "PONG" then
@@ -6871,6 +7084,7 @@ task.spawn(function()
         end
     end)
     task.wait(1)
+    FantasmaTag.announce(true)
     sendNetCmd(";PING ALL")
 end)
 
@@ -7135,6 +7349,7 @@ FantasmaGoner = {
     CLICK_ANIM = "rbxassetid://118273721275238",   -- animação ao clicar com o machado
     CLICK_ID   = 118273721275238,
     ANIM_ID    = 97005849733115,                   -- animação do goner parado (idle)
+    WALK_ID    = 108059497211872,                  -- animação do goner andando
     AXE_ID     = 14054756735,
     ICON       = "rbxassetid://130540399630094",
     SWING_ONLY = true,   -- true: só transforma se acertar durante o golpe (clique). false: qualquer encostada
@@ -7480,7 +7695,7 @@ function FantasmaGoner.hairIds(char)
     if not hum then return ids end
     local ok, d = pcall(function() return hum:GetAppliedDescription() end)
     if not ok or not d then return ids end
-    local skip = { [FantasmaGoner.AXE_ID] = true, [FantasmaGoner.ANIM_ID] = true, [FantasmaGoner.CLICK_ID] = true }
+    local skip = { [FantasmaGoner.AXE_ID] = true, [FantasmaGoner.ANIM_ID] = true, [FantasmaGoner.CLICK_ID] = true, [FantasmaGoner.WALK_ID] = true }
     for _, id in ipairs(FantasmaGoner.CLOTHES) do skip[id] = true end
     local seen = {}
     local function add(v)
@@ -7503,6 +7718,25 @@ function FantasmaGoner.removeHair(char)
     for _, id in ipairs(FantasmaGoner.hairIds(char)) do
         FantasmaGoner.wearId(id)
         task.wait(FantasmaGoner.WEAR_GAP)
+    end
+end
+
+-- tira a camisa que o personagem está usando (Wear num item equipado desequipa)
+function FantasmaGoner.removeShirt(char)
+    char = char or LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum or not FantasmaGoner.getWear() then return end
+    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
+    if not ok or not d then return end
+    local skip = {}
+    for _, id in ipairs(FantasmaGoner.CLOTHES) do skip[id] = true end
+    for _, prop in ipairs({ "Shirt", "GraphicTShirt" }) do
+        local id
+        pcall(function() id = tonumber(d[prop]) end)
+        if id and id > 0 and not skip[id] then
+            FantasmaGoner.wearId(id)
+            task.wait(FantasmaGoner.WEAR_GAP)
+        end
     end
 end
 
@@ -7545,6 +7779,7 @@ end
 -- sem cabelo + pele preta, no servidor do Brookhaven
 function FantasmaGoner.styleSelf(char)
     FantasmaGoner.removeHair(char)
+    FantasmaGoner.removeShirt(char)
     FantasmaGoner.paintBlack(char)
 end
 
@@ -7586,9 +7821,11 @@ function FantasmaGoner.clickAnim()
             task.wait(FantasmaGoner.WEAR_GAP)
             set = FantasmaGoner.appliedSet(char)
         end
-        if not set[idle] then
-            FantasmaGoner.wearId(idle)           -- volta a animação do goner parado
-            task.wait(FantasmaGoner.WEAR_GAP)
+        for _, id in ipairs({ idle, FantasmaGoner.WALK_ID }) do   -- volta parado + andando do goner
+            if not set[id] then
+                FantasmaGoner.wearId(id)
+                task.wait(FantasmaGoner.WEAR_GAP)
+            end
         end
         FantasmaGoner.clickBusy = false
     end)
@@ -7645,9 +7882,12 @@ function FantasmaGoner.equipAnim(char)
     spec.animDone = true
     -- a animação também é equipada pelo Wear (o Brookhaven trata como item de animação)
     if FantasmaGoner.getWear() then
-        if not FantasmaGoner.appliedSet(char)[FantasmaGoner.ANIM_ID] then
-            FantasmaGoner.wearId(FantasmaGoner.ANIM_ID)
-            task.wait(FantasmaGoner.WEAR_GAP)
+        local set = FantasmaGoner.appliedSet(char)
+        for _, id in ipairs({ FantasmaGoner.ANIM_ID, FantasmaGoner.WALK_ID }) do
+            if not set[id] then
+                FantasmaGoner.wearId(id)
+                task.wait(FantasmaGoner.WEAR_GAP)
+            end
         end
         return
     end
@@ -8169,14 +8409,7 @@ else
             name = "Authorized", icon = "shield-check",
             section = "Authorized", sectionIcon = "shield",
             items = {
-                cmd(";verify", "Verificar Usuários do Script", function()
-                    activeScriptUsers = { [LocalPlayer.Name] = true }
-                    sendNetCmd(";PING ALL")
-                    task.wait(2)
-                    local l = {}
-                    for n in pairs(activeScriptUsers) do table.insert(l, n) end
-                    notify("Rede", table.concat(l, ", "))
-                end),
+                cmd(";verificar", "Ver quem está usando o hub", function() FantasmaTag.verify() end),
                 cmd(";spawn", "Sair dos mundos (voltar ao spawn)", function() task.spawn(sair) end),
             },
         },
@@ -8215,6 +8448,33 @@ else
 
     -- ================== ABA CONFIGURAÇÃO ==================
     local TabCfg = Window:Tab({ Title = "Configuração", Icon = "settings" })
+
+    -- ---- Tag ----
+    TabCfg:Section({ Title = "Tag", Icon = "tag" })
+    TabCfg:Toggle({
+        Title = "Tag ativada",
+        Desc  = "Liga/desliga a tag (a sua e as que você vê)",
+        Value = true,
+        Callback = function(v) FantasmaTag.setEnabled(v) end,
+    })
+    TabCfg:Dropdown({
+        Title  = "Cor da tag",
+        Desc   = "Muda a cor da sua tag (os outros veem a cor escolhida)",
+        Values = FantasmaTag.presetNames(),
+        Value  = FantasmaTag.PRESETS[FantasmaTag.myColor()].name,
+        Callback = function(name) FantasmaTag.setColor(FantasmaTag.indexOf(name)) end,
+    })
+
+    -- ---- Desempenho ----
+    TabCfg:Section({ Title = "Desempenho", Icon = "gauge" })
+    TabCfg:Dropdown({
+        Title  = "Anti-lag",
+        Desc   = "Reduz sombras/efeitos do mapa para não travar. Nenhuma função do hub é removida",
+        Values = { "Desligado", "Leve", "Forte" },
+        Value  = "Leve",
+        Callback = function(v) FantasmaPerf.set(v) end,
+    })
+    FantasmaPerf.set("Leve")
 
     -- ---- Aparência: transparência do painel ----
     TabCfg:Section({ Title = "Aparência", Icon = "paintbrush" })
