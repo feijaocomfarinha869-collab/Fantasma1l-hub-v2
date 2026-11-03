@@ -7134,7 +7134,7 @@ FantasmaGoner = {
     GONER_ANIM = "rbxassetid://71611618090433",
     CLICK_ANIM = "rbxassetid://122004540368995",
     ANIM_ID    = 71611618090433,
-    AXE_ID     = 79883679436493,
+    AXE_ID     = 14054756735,
     ICON       = "rbxassetid://130540399630094",
     SWING_ONLY = true,   -- true: só transforma se acertar durante o golpe (clique). false: qualquer encostada
     SWING_TIME = 1.0,
@@ -7337,14 +7337,7 @@ function FantasmaGoner.ensure(char)
         end
     end
     for id in pairs(rebuild) do
-        if id == "auto" then
-            if os.clock() - (spec.lastAuto or 0) > 6 then
-                spec.lastAuto = os.clock()
-                if not FantasmaGoner.wearAuto(char) then spec.items.auto = nil FantasmaGoner.applyLocal(char) end
-            end
-        else
-            FantasmaGoner.applyId(char, id)
-        end
+        FantasmaGoner.applyId(char, id)
         task.wait(0.1)
     end
 end
@@ -7374,136 +7367,87 @@ function FantasmaGoner.applyLocal(char)
     if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
 end
 
--- conta quantos dos IDs do goner o servidor realmente aplicou no personagem
-function FantasmaGoner.appliedCount(char)
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then return 0 end
-    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
-    if not ok or not d then return 0 end
-    local want = {}
-    for _, id in ipairs(FantasmaGoner.CLOTHES) do want[id] = true end
-    local n = 0
-    local function chk(v) v = tonumber(v) if v and want[v] then n += 1 end end
-    for _, prop in ipairs({ "Shirt", "Pants", "GraphicTShirt", "Head", "Torso", "LeftArm", "RightArm", "LeftLeg", "RightLeg", "Face" }) do
-        pcall(function() chk(d[prop]) end)
-    end
-    for _, prop in ipairs({ "HatAccessory", "HairAccessory", "FaceAccessory", "NeckAccessory", "ShouldersAccessory",
-        "FrontAccessory", "BackAccessory", "WaistAccessory" }) do
-        pcall(function() for part in tostring(d[prop]):gmatch("%d+") do chk(part) end end)
-    end
-    pcall(function() for _, a in ipairs(d:GetAccessories(true)) do chk(a.AssetId) end end)
-    return n
-end
+-- ===== MÉTODO CERTO DO BROOKHAVEN (visto em scripts da comunidade) =====
+-- ReplicatedStorage.Remotes.Wear:InvokeServer(assetId)  -> UM item por chamada (roupa, acessório,
+-- rosto e até animação). Chamar rápido demais é ignorado pelo servidor (tem cooldown), então
+-- é uma chamada por vez, esperando a resposta, com pausa entre elas.
+FantasmaGoner.WEAR_GAP = 1.3
+-- opcional: se algum ID for parte do corpo, preencha {torso, bracoDir, bracoEsq, pernaDir, pernaEsq, cabeca} (0 = nenhum)
+FantasmaGoner.BODY = nil
 
--- MÉTODO DO BROOKHAVEN: Remotes.ChangeCharacterBody recebe UMA tabela com os 6 IDs de uma vez
--- (o menu "Roupa" tem 6 slots; mandar um por vez fazia cada um substituir o anterior)
-FantasmaGoner.autoBusy = false
-function FantasmaGoner.wearAuto(char)
-    if FantasmaGoner.autoBusy then return false end
-    char = char or LocalPlayer.Character
-    if not char then return false end
+function FantasmaGoner.getWear()
     local RS = game:GetService("ReplicatedStorage")
-    local holder = RS:FindFirstChild("Remotes")
-    local rem = holder and holder:FindFirstChild("ChangeCharacterBody")
-    if not rem then
-        for _, d in ipairs(RS:GetDescendants()) do
-            if d.Name == "ChangeCharacterBody" and (d:IsA("RemoteFunction") or d:IsA("RemoteEvent")) then rem = d break end
-        end
-    end
-    if not rem then return false end
-    FantasmaGoner.autoBusy = true
-    local success = false
-    -- UMA chamada só, como os scripts da comunidade. Não mexe em nada do personagem depois:
-    -- o Brookhaven é quem aplica e guarda a roupa (mexer por cima fazia ela sumir).
-    for _, mode in ipairs({ "number", "string" }) do
-        local ids = {}
-        for _, id in ipairs(FantasmaGoner.CLOTHES) do
-            ids[#ids + 1] = (mode == "string") and tostring(id) or id
-        end
-        local done, ok = false, false
-        task.spawn(function()
-            if rem:IsA("RemoteFunction") then
-                ok = pcall(function() return rem:InvokeServer(ids) end)
-            else
-                ok = pcall(function() rem:FireServer(ids) end)
-            end
-            done = true
-        end)
-        local t0 = os.clock()
-        while not done and os.clock() - t0 < 8 do task.wait(0.1) end
-        if not done or ok then   -- sem erro (ou o servidor ainda processando) = aceitou
-            success = true
-            break
-        end
-    end
-    task.wait(1)
-    FantasmaGoner.autoBusy = false
-    return success
+    local holder = RS:FindFirstChild("Remotes") or RS:WaitForChild("Remotes", 5)
+    if not holder then return nil end
+    return holder:FindFirstChild("Wear") or holder:WaitForChild("Wear", 5)
 end
 
--- equipa no Brookhaven: cada ID é enviado UMA vez por personagem (reenviar desequipa)
+-- uma chamada de Wear que espera o servidor responder (máx 8s)
+function FantasmaGoner.wearId(id)
+    local r = FantasmaGoner.getWear()
+    if not r then return false end
+    local done, ok = false, false
+    task.spawn(function()
+        ok = pcall(function()
+            if r:IsA("RemoteFunction") then return r:InvokeServer(id) else r:FireServer(id) end
+        end)
+        done = true
+    end)
+    local t0 = os.clock()
+    while not done and os.clock() - t0 < 8 do task.wait(0.1) end
+    return ok
+end
+
+-- conjunto de IDs que o personagem JÁ está usando (evita chamar Wear de novo e desequipar)
+function FantasmaGoner.appliedSet(char)
+    local set = {}
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return set end
+    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
+    if not ok or not d then return set end
+    local function add(v) v = tonumber(v) if v and v > 0 then set[v] = true end end
+    for _, prop in ipairs({ "Shirt", "Pants", "GraphicTShirt", "Face", "Head", "Torso", "LeftArm", "RightArm",
+        "LeftLeg", "RightLeg", "IdleAnimation", "RunAnimation", "WalkAnimation", "JumpAnimation",
+        "FallAnimation", "ClimbAnimation", "SwimAnimation" }) do
+        pcall(function() add(d[prop]) end)
+    end
+    for _, prop in ipairs({ "HatAccessory", "HairAccessory", "FaceAccessory", "NeckAccessory",
+        "ShouldersAccessory", "FrontAccessory", "BackAccessory", "WaistAccessory" }) do
+        pcall(function() for part in tostring(d[prop]):gmatch("%d+") do add(part) end end)
+    end
+    pcall(function() for _, a in ipairs(d:GetAccessories(true)) do add(a.AssetId) end end)
+    return set
+end
+
+-- equipa as 6 roupas pelo Brookhaven, uma por vez, sem repetir (repetir desequipa)
 function FantasmaGoner.wear(char)
     char = char or LocalPlayer.Character
     if not char then return end
     local spec = FantasmaGoner.getSpec(char)
-    if not spec.worn.auto then
-        local before = {}
-        for _, o in ipairs(char:GetChildren()) do before[o] = true end
-        if FantasmaGoner.wearAuto(char) then
-            spec.worn.auto = true
-        end
-        -- Brookhaven guarda as peças no menu, mas o servidor não desenha item que você não possui
-        -- (por isso aparece o preço em Robux). Então as peças são colocadas direto no seu boneco.
-        task.wait(1)
+    if spec.wornDone then return end
+    spec.wornDone = true
+    if not FantasmaGoner.getWear() then
+        notify("Goner", "Remote Wear do Brookhaven não encontrado. Aplicando direto no boneco.")
         FantasmaGoner.applyLocal(char)
         FantasmaGoner.startWatcher()
         return
-    else
-        return
     end
-    local RS = game:GetService("ReplicatedStorage")
-    local remotes = {}
-    for _, d in ipairs(RS:GetDescendants()) do
-        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
-            local n = string.lower(d.Name)
-            if n:find("wear") or n:find("cloth") or n:find("outfit") or n:find("accessor") then
-                table.insert(remotes, d)
-            end
+    if FantasmaGoner.BODY then
+        local holder = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+        local cb = holder and holder:FindFirstChild("ChangeCharacterBody")
+        local b = FantasmaGoner.BODY
+        if cb then
+            pcall(function() cb:InvokeServer({ b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 0, b[5] or 0, b[6] or 0 }) end)
+            task.wait(FantasmaGoner.WEAR_GAP)
         end
     end
-    local failed = {}
-    for _, id in ipairs(FantasmaGoner.CLOTHES) do
-        if not spec.worn[id] then
-            spec.worn[id] = true
-            local before = {}
-            for _, o in ipairs(char:GetChildren()) do before[o] = true end
-            if not FantasmaGoner.fireTemplate("wear", id) then
-                for _, r in ipairs(remotes) do
-                    pcall(function()
-                        if r:IsA("RemoteEvent") then r:FireServer(id)
-                        else task.spawn(function() pcall(function() r:InvokeServer(id) end) end) end
-                    end)
-                end
-            end
-            task.wait(1.5)
-            local mine = {}
-            for _, o in ipairs(char:GetChildren()) do
-                if not before[o] and (o:IsA("Accessory") or o:IsA("Shirt") or o:IsA("Pants")
-                    or o:IsA("ShirtGraphic") or o:IsA("BodyColors")) then
-                    table.insert(mine, o)
-                end
-            end
-            if #mine > 0 then
-                spec.items[id] = mine            -- o Brookhaven colocou: só vigiar
-            else
-                local r = FantasmaGoner.applyId(char, id)   -- não colocou: aplica local
-                if r == -1 then table.insert(failed, id) end
-            end
+    local have = FantasmaGoner.appliedSet(char)
+    for i, id in ipairs(FantasmaGoner.CLOTHES) do
+        if not have[id] then
+            FantasmaGoner.wearId(id)
+            task.wait(FantasmaGoner.WEAR_GAP)
         end
     end
-    FantasmaGoner.ensure(char)
-    FantasmaGoner.startWatcher()
-    if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
 end
 
 -- transforma o PRÓPRIO jogador em goner (usado pelo comando de rede)
@@ -7555,8 +7499,15 @@ function FantasmaGoner.equipAnim(char)
     local spec = FantasmaGoner.getSpec(char)
     if spec.animDone then return end
     spec.animDone = true
-    if FantasmaGoner.fireTemplate("anim", FantasmaGoner.ANIM_ID) then return end
-    -- sem remote aprendido: toca a animação do goner em loop no próprio personagem
+    -- a animação também é equipada pelo Wear (o Brookhaven trata como item de animação)
+    if FantasmaGoner.getWear() then
+        if not FantasmaGoner.appliedSet(char)[FantasmaGoner.ANIM_ID] then
+            FantasmaGoner.wearId(FantasmaGoner.ANIM_ID)
+            task.wait(FantasmaGoner.WEAR_GAP)
+        end
+        return
+    end
+    -- sem remote: toca a animação do goner em loop no próprio personagem
     local hum = char:FindFirstChildOfClass("Humanoid")
     local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 3))
     if not animator then return end
@@ -7658,15 +7609,17 @@ function FantasmaGoner.giveAxe()
     local okIcon, img = pcall(resolveImage, FantasmaGoner.ICON)
     local icon = (okIcon and img) or FantasmaGoner.ICON
 
-    -- 1) tenta equipar o machado pelo Brookhaven (mesmo remote das roupas)
-    if FantasmaGoner.templates.wear then
+    -- 1) machado equipado pelo Brookhaven (Wear), como as roupas
+    if FantasmaGoner.getWear() then
         local before = {}
         for _, h in ipairs({ backpack, char }) do
             for _, o in ipairs(h:GetChildren()) do before[o] = true end
         end
-        FantasmaGoner.fireTemplate("wear", FantasmaGoner.AXE_ID)
-        task.wait(1.5)
-        -- 1a) Brookhaven entregou um Tool: usa ele
+        if not FantasmaGoner.appliedSet(char)[FantasmaGoner.AXE_ID] then
+            FantasmaGoner.wearId(FantasmaGoner.AXE_ID)
+            task.wait(FantasmaGoner.WEAR_GAP + 0.7)
+        end
+        -- veio um Tool?
         for _, h in ipairs({ backpack, char }) do
             for _, o in ipairs(h:GetChildren()) do
                 if not before[o] and o:IsA("Tool") then
@@ -7677,28 +7630,40 @@ function FantasmaGoner.giveAxe()
                 end
             end
         end
-        -- 1b) Brookhaven colocou como acessório: tool que mostra/esconde o machado ao equipar/desequipar
-        for _, o in ipairs(char:GetChildren()) do
-            if not before[o] and o:IsA("Accessory") then
-                local spec = FantasmaGoner.getSpec(char)
-                spec.items[FantasmaGoner.AXE_ID] = { o }
-                local tool = Instance.new("Tool")
-                tool.Name = "Machado Goner"
-                tool.RequiresHandle = false
-                tool.CanBeDropped = false
-                tool.TextureId = icon
-                local function show(v)
-                    for _, d in ipairs(o:GetDescendants()) do
-                        if d:IsA("BasePart") then d.LocalTransparencyModifier = v and 0 or 1 end
-                    end
-                end
-                show(false)
-                tool.Equipped:Connect(function() show(true) end)
-                tool.Unequipped:Connect(function() show(false) end)
-                FantasmaGoner.setupTool(tool, { o })
-                tool.Parent = backpack
-                return
+        -- veio como acessório: acha pelo formato e liga ao tool (mostra ao equipar, some ao desequipar)
+        local axeAcc
+        local objs = FantasmaGoner.load(FantasmaGoner.AXE_ID)
+        local want = ""
+        if objs then
+            for _, o in ipairs(objs) do
+                local acc = o:IsA("Accessory") and o or o:FindFirstChildWhichIsA("Accessory", true)
+                if acc then want = FantasmaGoner.meshOf(acc) break end
             end
+        end
+        for _, o in ipairs(char:GetChildren()) do
+            if o:IsA("Accessory") and ((want ~= "" and FantasmaGoner.meshOf(o) == want)
+                or (not before[o] and want == "")) then
+                axeAcc = o break
+            end
+        end
+        if axeAcc then
+            local tool = Instance.new("Tool")
+            tool.Name = "Machado Goner"
+            tool.ToolTip = "Machado Goner"
+            tool.RequiresHandle = false
+            tool.CanBeDropped = false
+            tool.TextureId = icon
+            local function show(v)
+                for _, d in ipairs(axeAcc:GetDescendants()) do
+                    if d:IsA("BasePart") then d.LocalTransparencyModifier = v and 0 or 1 end
+                end
+            end
+            show(false)
+            tool.Equipped:Connect(function() show(true) end)
+            tool.Unequipped:Connect(function() show(false) end)
+            FantasmaGoner.setupTool(tool, { axeAcc })
+            tool.Parent = backpack
+            return
         end
     end
 
@@ -7722,15 +7687,7 @@ function FantasmaGoner.activate()
         FantasmaGoner.respawnConn = LocalPlayer.CharacterAdded:Connect(function(c)
             if not FantasmaGoner.keep then return end
             task.wait(3)
-            local cf = FantasmaGoner.savedCF
-            FantasmaGoner.savedCF = nil
-            if cf then
-                local hrp = c:WaitForChild("HumanoidRootPart", 5)
-                if hrp then hrp.CFrame = cf end
-            end
-            FantasmaGoner.resetting = false
             FantasmaGoner.wear(c)
-            if FantasmaGoner.resetting then return end
             FantasmaGoner.equipAnim(c)
             FantasmaGoner.giveAxe()
         end)
@@ -7742,9 +7699,7 @@ function FantasmaGoner.activate()
             FantasmaGoner.learn("wear", "1/2: abra o menu de ROUPA do Brookhaven e toque em QUALQUER item 1 vez.")
             FantasmaGoner.learn("anim", "2/2: agora abra o menu de ANIMAÇÃO do Brookhaven e toque em QUALQUER animação 1 vez.")
         end
-        FantasmaGoner.resetTried = false
         FantasmaGoner.wear(LocalPlayer.Character)
-        if FantasmaGoner.resetting then return end   -- renascendo: o resto roda quando o novo personagem nascer
         FantasmaGoner.equipAnim(LocalPlayer.Character)
         FantasmaGoner.giveAxe()
         notify("Goner", "Gonerplayer ativado! Roupa + animação + Machado Goner.")
@@ -7755,7 +7710,7 @@ function FantasmaGoner.relearn()
     FantasmaGoner.templates = {}
     FantasmaGoner.forceLearn = true
     local ch = LocalPlayer.Character
-    if ch and FantasmaGoner.specs[ch] then FantasmaGoner.specs[ch].worn = {} FantasmaGoner.specs[ch].animDone = false end
+    if ch and FantasmaGoner.specs[ch] then FantasmaGoner.specs[ch].wornDone = false FantasmaGoner.specs[ch].animDone = false end
     FantasmaGoner.activate()
 end
 
