@@ -7236,6 +7236,14 @@ function FantasmaGoner.retire(inst)
     pcall(function() inst:Destroy() end)
 end
 
+function FantasmaGoner.meshOf(acc)
+    local h = acc:FindFirstChild("Handle")
+    if not h then return "" end
+    if h:IsA("MeshPart") and h.MeshId ~= "" then return h.MeshId end
+    local sm = h:FindFirstChildOfClass("SpecialMesh")
+    return sm and sm.MeshId or ""
+end
+
 -- aplica UM ID localmente. Cada item é rastreado pelo ID (sem comparar aparência,
 -- então acessórios parecidos como as duas asas NÃO são tratados como repetidos).
 -- retorna -1 se não carregou
@@ -7272,7 +7280,17 @@ function FantasmaGoner.applyId(char, id)
         elseif o:IsA("Accessory") then
             local c = o:Clone()
             c:SetAttribute("GonerLocal", true)
-            local ok = pcall(function() hum:AddAccessory(c) end)
+            -- já existe igual desenhado pelo servidor? então não duplica
+            local dup = false
+            local mesh = FantasmaGoner.meshOf(c)
+            if mesh ~= "" then
+                for _, ex in ipairs(char:GetChildren()) do
+                    if ex:IsA("Accessory") and not ex:GetAttribute("GonerLocal") and FantasmaGoner.meshOf(ex) == mesh then
+                        dup = true break
+                    end
+                end
+            end
+            local ok = (not dup) and pcall(function() hum:AddAccessory(c) end)
             if ok and c.Parent == char then
                 table.insert(mine, c)
                 table.insert(accs, c)
@@ -7433,35 +7451,13 @@ function FantasmaGoner.wear(char)
         for _, o in ipairs(char:GetChildren()) do before[o] = true end
         if FantasmaGoner.wearAuto(char) then
             spec.worn.auto = true
-            task.wait(2)
-            local appeared = FantasmaGoner.appliedCount(char) > 0
-            if not appeared then
-                for _, o in ipairs(char:GetChildren()) do
-                    if not before[o] and (o:IsA("Accessory") or o:IsA("Shirt") or o:IsA("Pants")
-                        or o:IsA("ShirtGraphic") or o:IsA("BodyColors")) then appeared = true break end
-                end
-            end
-            if not appeared then
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if not FantasmaGoner.resetTried and hum and hrp then
-                    -- o menu guardou a roupa mas o boneco não atualizou: renasce 1 vez para o Brookhaven aplicar
-                    FantasmaGoner.resetTried = true
-                    FantasmaGoner.resetting = true
-                    FantasmaGoner.savedCF = hrp.CFrame
-                    notify("Goner", "Roupa salva no menu. Renascendo 1 vez para aparecer no boneco...")
-                    task.wait(0.5)
-                    hum.Health = 0
-                    return
-                end
-                notify("Goner", "Aplicando a roupa direto no boneco...")
-                FantasmaGoner.applyLocal(char)
-            else
-                FantasmaGoner.resetTried = false
-            end
-            FantasmaGoner.startWatcher()
-            return
         end
+        -- Brookhaven guarda as peças no menu, mas o servidor não desenha item que você não possui
+        -- (por isso aparece o preço em Robux). Então as peças são colocadas direto no seu boneco.
+        task.wait(1)
+        FantasmaGoner.applyLocal(char)
+        FantasmaGoner.startWatcher()
+        return
     else
         return
     end
