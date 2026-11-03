@@ -7356,6 +7356,27 @@ function FantasmaGoner.applyLocal(char)
     if #failed > 0 then notify("Goner", "Falhou carregar: " .. table.concat(failed, ", ")) end
 end
 
+-- conta quantos dos IDs do goner o servidor realmente aplicou no personagem
+function FantasmaGoner.appliedCount(char)
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return 0 end
+    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
+    if not ok or not d then return 0 end
+    local want = {}
+    for _, id in ipairs(FantasmaGoner.CLOTHES) do want[id] = true end
+    local n = 0
+    local function chk(v) v = tonumber(v) if v and want[v] then n += 1 end end
+    for _, prop in ipairs({ "Shirt", "Pants", "GraphicTShirt", "Head", "Torso", "LeftArm", "RightArm", "LeftLeg", "RightLeg", "Face" }) do
+        pcall(function() chk(d[prop]) end)
+    end
+    for _, prop in ipairs({ "HatAccessory", "HairAccessory", "FaceAccessory", "NeckAccessory", "ShouldersAccessory",
+        "FrontAccessory", "BackAccessory", "WaistAccessory" }) do
+        pcall(function() for part in tostring(d[prop]):gmatch("%d+") do chk(part) end end)
+    end
+    pcall(function() for _, a in ipairs(d:GetAccessories(true)) do chk(a.AssetId) end end)
+    return n
+end
+
 -- MÉTODO DO BROOKHAVEN: Remotes.ChangeCharacterBody recebe UMA tabela com os 6 IDs de uma vez
 -- (o menu "Roupa" tem 6 slots; mandar um por vez fazia cada um substituir o anterior)
 FantasmaGoner.autoBusy = false
@@ -7373,34 +7394,31 @@ function FantasmaGoner.wearAuto(char)
     end
     if not rem then return false end
     FantasmaGoner.autoBusy = true
-    local spec = FantasmaGoner.getSpec(char)
     local success = false
+    -- UMA chamada só, como os scripts da comunidade. Não mexe em nada do personagem depois:
+    -- o Brookhaven é quem aplica e guarda a roupa (mexer por cima fazia ela sumir).
     for _, mode in ipairs({ "number", "string" }) do
-        local before = {}
-        for _, o in ipairs(char:GetChildren()) do before[o] = true end
         local ids = {}
         for _, id in ipairs(FantasmaGoner.CLOTHES) do
             ids[#ids + 1] = (mode == "string") and tostring(id) or id
         end
+        local done, ok = false, false
         task.spawn(function()
-            pcall(function()
-                if rem:IsA("RemoteFunction") then rem:InvokeServer(ids) else rem:FireServer(ids) end
-            end)
-        end)
-        task.wait(2.5)
-        local mine = {}
-        for _, o in ipairs(char:GetChildren()) do
-            if not before[o] and (o:IsA("Accessory") or o:IsA("Shirt") or o:IsA("Pants")
-                or o:IsA("ShirtGraphic") or o:IsA("BodyColors")) then
-                table.insert(mine, o)
+            if rem:IsA("RemoteFunction") then
+                ok = pcall(function() return rem:InvokeServer(ids) end)
+            else
+                ok = pcall(function() rem:FireServer(ids) end)
             end
-        end
-        if #mine > 0 then
-            spec.items.auto = mine
+            done = true
+        end)
+        local t0 = os.clock()
+        while not done and os.clock() - t0 < 8 do task.wait(0.1) end
+        if not done or ok then   -- sem erro (ou o servidor ainda processando) = aceitou
             success = true
             break
         end
     end
+    task.wait(1)
     FantasmaGoner.autoBusy = false
     return success
 end
@@ -7411,8 +7429,23 @@ function FantasmaGoner.wear(char)
     if not char then return end
     local spec = FantasmaGoner.getSpec(char)
     if not spec.worn.auto then
+        local before = {}
+        for _, o in ipairs(char:GetChildren()) do before[o] = true end
         if FantasmaGoner.wearAuto(char) then
             spec.worn.auto = true
+            task.wait(2)
+            local appeared = FantasmaGoner.appliedCount(char) > 0
+            if not appeared then
+                for _, o in ipairs(char:GetChildren()) do
+                    if not before[o] and (o:IsA("Accessory") or o:IsA("Shirt") or o:IsA("Pants")
+                        or o:IsA("ShirtGraphic") or o:IsA("BodyColors")) then appeared = true break end
+                end
+            end
+            if not appeared then
+                -- o menu aceitou mas o boneco não mudou: aplica visualmente no personagem
+                notify("Goner", "Roupa não apareceu no boneco, aplicando direto nele...")
+                FantasmaGoner.applyLocal(char)
+            end
             FantasmaGoner.startWatcher()
             return
         end
