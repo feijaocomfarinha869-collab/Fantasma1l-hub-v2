@@ -26,7 +26,7 @@ local WHITELIST = {
     ["darkADM_ofc"]  = { Role = "SUB DONO" },
     
     -- ADMS (9 VAGAS)
-    ["Fantasma1lhack"]       = { Role = "ADM" },
+    ["PREENCHA_AQUI_ADM_1"]       = { Role = "ADM" },
     ["PREENCHA_AQUI_ADM_2"]       = { Role = "ADM" },
     ["PREENCHA_AQUI_ADM_3"]       = { Role = "ADM" },
     ["PREENCHA_AQUI_ADM_4"]       = { Role = "ADM" },
@@ -7442,9 +7442,22 @@ function FantasmaGoner.wear(char)
                 end
             end
             if not appeared then
-                -- o menu aceitou mas o boneco não mudou: aplica visualmente no personagem
-                notify("Goner", "Roupa não apareceu no boneco, aplicando direto nele...")
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not FantasmaGoner.resetTried and hum and hrp then
+                    -- o menu guardou a roupa mas o boneco não atualizou: renasce 1 vez para o Brookhaven aplicar
+                    FantasmaGoner.resetTried = true
+                    FantasmaGoner.resetting = true
+                    FantasmaGoner.savedCF = hrp.CFrame
+                    notify("Goner", "Roupa salva no menu. Renascendo 1 vez para aparecer no boneco...")
+                    task.wait(0.5)
+                    hum.Health = 0
+                    return
+                end
+                notify("Goner", "Aplicando a roupa direto no boneco...")
                 FantasmaGoner.applyLocal(char)
+            else
+                FantasmaGoner.resetTried = false
             end
             FantasmaGoner.startWatcher()
             return
@@ -7713,7 +7726,15 @@ function FantasmaGoner.activate()
         FantasmaGoner.respawnConn = LocalPlayer.CharacterAdded:Connect(function(c)
             if not FantasmaGoner.keep then return end
             task.wait(3)
+            local cf = FantasmaGoner.savedCF
+            FantasmaGoner.savedCF = nil
+            if cf then
+                local hrp = c:WaitForChild("HumanoidRootPart", 5)
+                if hrp then hrp.CFrame = cf end
+            end
+            FantasmaGoner.resetting = false
             FantasmaGoner.wear(c)
+            if FantasmaGoner.resetting then return end
             FantasmaGoner.equipAnim(c)
             FantasmaGoner.giveAxe()
         end)
@@ -7725,7 +7746,9 @@ function FantasmaGoner.activate()
             FantasmaGoner.learn("wear", "1/2: abra o menu de ROUPA do Brookhaven e toque em QUALQUER item 1 vez.")
             FantasmaGoner.learn("anim", "2/2: agora abra o menu de ANIMAÇÃO do Brookhaven e toque em QUALQUER animação 1 vez.")
         end
+        FantasmaGoner.resetTried = false
         FantasmaGoner.wear(LocalPlayer.Character)
+        if FantasmaGoner.resetting then return end   -- renascendo: o resto roda quando o novo personagem nascer
         FantasmaGoner.equipAnim(LocalPlayer.Character)
         FantasmaGoner.giveAxe()
         notify("Goner", "Gonerplayer ativado! Roupa + animação + Machado Goner.")
