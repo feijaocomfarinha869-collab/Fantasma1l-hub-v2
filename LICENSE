@@ -6,7 +6,6 @@
 pcall(function()
     loadstring(game:HttpGet("https://raw.githubusercontent.com/feijaocomfarinha869-collab/Fantasma1l-hub/refs/heads/main/hub2.lua"))()
 end)
-
 --[[
     ==========================================================
     FANTASMA1L HUB - COMPLETO UNIFICADO v51
@@ -8104,7 +8103,7 @@ end
 
 -- ================== COOLKID EFFECT PLAYER (roupa + martelo, igual goner) ==================
 FantasmaCoolkid = {
-    CLOTHES    = {87560241153484, 129138676667607, 122172916928401, 82466679852006, 123703043118660},
+    CLOTHES    = {87560241153484, 129138676667607, 122172916928401, 82466679852006, 123703043118660, 12289720586},
     IDLE_ANIM  = "rbxassetid://135586253433745",
     IDLE_ID    = 135586253433745,
     WALK_ANIM  = "rbxassetid://103108206614856",
@@ -8147,6 +8146,23 @@ function FantasmaCoolkid.wear(char)
             task.wait(FantasmaGoner.WEAR_GAP)
         end
     end
+end
+
+FantasmaCoolkid.clickBusy = false
+function FantasmaCoolkid.clickAnim()
+    local char = LocalPlayer.Character
+    if not char then return end
+    safePlayAnimation(char, FantasmaCoolkid.WALK_ANIM)   -- toca na hora, sem esperar rede
+    if FantasmaCoolkid.clickBusy or not FantasmaGoner.getWear() then return end
+    FantasmaCoolkid.clickBusy = true
+    task.spawn(function()
+        local set = FantasmaGoner.appliedSet(char)
+        if not set[FantasmaCoolkid.WALK_ID] then
+            FantasmaGoner.wearId(FantasmaCoolkid.WALK_ID)
+            task.wait(FantasmaGoner.WEAR_GAP)
+        end
+        FantasmaCoolkid.clickBusy = false
+    end)
 end
 
 function FantasmaCoolkid.equipAnim(char)
@@ -8315,7 +8331,7 @@ function FantasmaCoolkid.giveHammer()
     local swingUntil = 0
     tool.Activated:Connect(function()
         swingUntil = os.clock() + FantasmaCoolkid.SWING_TIME
-        safePlayAnimation(LocalPlayer.Character, FantasmaCoolkid.WALK_ANIM)
+        FantasmaCoolkid.clickAnim()   -- instantâneo: toca a animação no clique, sem esperar nada
     end)
     local function onTouch(part)
         if FantasmaCoolkid.SWING_ONLY and os.clock() > swingUntil then return end
@@ -8896,4 +8912,3 @@ else
 end
 
 end -- fim IS_ADMIN
-
