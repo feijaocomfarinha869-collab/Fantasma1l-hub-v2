@@ -6777,7 +6777,7 @@ FNAF2 = {
     HIGHLIGHT = true,  -- contorno vermelho no Freddy (ajuda a achar no escuro; ponha false pra tirar)
     SINGLE = true,     -- o asset inteiro é UM animatrônico
     JUMP_ID    = "8765657361",                -- JUMPSCARE: modelo + script (usa a tela/som/modelo de dentro dele)
-    WALK_ANIM  = "rbxassetid://73099178451291",   -- animação de ANDAR do Freddy (toca enquanto ele anda, para quando ele para)
+    WALK_ANIM  = "rbxassetid://135552757941237",  -- animação do Freddy ANDANDO/CORRENDO (toca enquanto ele se move, para quando ele para)
     JUMP_FLIP  = false,                            -- se o jumpscare aparecer de costas, troque pra true
     JUMP_IMG   = "rbxassetid://134604574029060",  -- (reserva) imagem se o modelo acima não trouxer nada
     JUMP_SOUND = "rbxassetid://5111163553",       -- som do jumpscare (sempre usado)
@@ -6785,7 +6785,16 @@ FNAF2 = {
     SPEED = 8,         -- velocidade do Freddy (studs/s) - menor = mais lento
     CATCH = 5,         -- distância pra "pegar"
     HOUR_SECONDS = 45, -- segundos reais de cada "hora" da noite (12 AM -> 6 AM = 6 horas)
-    START_HOUR = 1,    -- os animatrônicos só começam a andar nessa hora (1 = 1 AM). Antes disso ficam parados
+    HOME = Vector3.new(-14032.9, 9006.7, 68.0),   -- onde o Freddy fica PARADO e CALMO (X, Y, Z do seu console)
+    SPAWN_POS  = Vector3.new(-13941.9, 9003.9, -71.9),  -- ONDE VOCÊ NASCE no FNaF 2
+    ATTACK_POS = Vector3.new(-13940.2, 9003.9, 3.0),    -- pra onde o Freddy TELEPORTA (depois da câmera) pra pegar/perseguir o alvo
+    ERR_ID = "114583276912002",                   -- ERRO da câmera (imagem e/ou som)
+    CAM_FIRST = 12,                -- segundos até o Freddy aparecer numa câmera pela 1ª vez
+    CAM_MIN = 10, CAM_MAX = 20,    -- intervalo (s) entre uma aparição e outra (diminui conforme a noite avança)
+    ERR_TIME = 3,                  -- quanto tempo a câmera fica com ERRO antes dele aparecer nela
+    STARE_MIN = 7, STARE_MAX = 14, -- quanto tempo ele fica olhando pra câmera
+    CHASE_HOUR = 0,                -- a partir dessa hora ele teleporta pro ATTACK_POS e persegue (0 = sempre; 4 = só de 4 AM em diante; 99 = nunca)
+    CHASE_TIME = 20,               -- segundos perseguindo antes de voltar calmo pro lugar dele
     FLASH_ID = "14886536073",                      -- lanterna
     MONITOR_IMG = "194464827", MONITOR_TRANSP = 0.3,   -- adesivo do monitor (0 = opaco, 1 = invisível)
     CAM_MAP_IMG = "130782022950969",               -- mapa das câmeras (CAM 01, CAM 02...)
@@ -7170,11 +7179,7 @@ function FNAF2.catch(S, a, t, myToken, spawnCF)
         pcall(function() m:PivotTo(CFrame.new(a.home)) end)
         S.chasing = false
         S.catching = false
-        task.delay(5, function()
-            if FNAF2.token == myToken and FNAF2.S == S and not S.frozen and (S.hour or 0) >= FNAF2.START_HOUR then
-                S.chasing = true
-            end
-        end)
+        -- (depois do ataque ele volta pro lugar dele e o "diretor" decide a próxima aparição)
     end)
 end
 
@@ -7235,7 +7240,7 @@ function FNAF2.limbs(a, on, now)
     end
 end
 
-function FNAF2.setWalk(a, on, now)
+function FNAF2.setWalk(a, on, now, ratio)
     if not a then return end
     local w = a.walk
     if w and not a.walkFailed then
@@ -7244,6 +7249,7 @@ function FNAF2.setWalk(a, on, now)
         elseif not on and w.IsPlaying then
             pcall(function() w:Stop() end)
         end
+        if on and ratio then pcall(function() w:AdjustSpeed(math.clamp(ratio, 0.8, 1.8)) end) end   -- anda/corre mais rápido conforme a hora
         return
     end
     FNAF2.limbs(a, on, now or tick())
@@ -7293,7 +7299,7 @@ function FNAF2.buildCams(S, map, spawnCF)
         end
     end
     local sp = spawnCF.Position + Vector3.new(0, 6, 0)
-    table.insert(cams, { cf = CFrame.lookAt(sp, sp + Vector3.new(0, -2, -30)) })
+    table.insert(cams, { cf = CFrame.lookAt(sp, sp + Vector3.new(0, -2, 30)) })
     return cams
 end
 
@@ -7341,6 +7347,11 @@ function FNAF2.openMonitor(S)
         local cam = workspace.CurrentCamera
         cam.CameraType = Enum.CameraType.Scriptable
         cam.CFrame = c.cf * CFrame.Angles(0, math.sin(tick() * 0.5) * 0.3, 0)   -- câmera varrendo devagar, igual ao FNaF
+        if S.errFrame then
+            local e = (S.errCam ~= nil and S.errCam == (S.curCam or 1))   -- a câmera que vai receber o Freddy mostra ERRO
+            S.errFrame.Visible = e
+            if e then S.errFrame.BackgroundTransparency = math.random() * 0.25 end
+        end
     end)
 end
 
@@ -7421,6 +7432,15 @@ function FNAF2.buildHUD(S)
         ImageTransparency = FNAF2.MONITOR_TRANSP, ScaleType = Enum.ScaleType.Stretch, ZIndex = 1 }, mon)
     local static = mk("Frame", { Name = "Static", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(190, 190, 190),
         BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2 }, mon)
+    local errFrame = mk("Frame", { Name = "Err", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0),
+        BorderSizePixel = 0, ZIndex = 3, Visible = false }, mon)
+    local errImg = mk("ImageLabel", { Size = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.42, 0), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Fit, ZIndex = 4,
+        Image = "rbxassetid://" .. FNAF2.ERR_ID }, errFrame)
+    S.errFrame = errFrame
+    mk("TextLabel", { Name = "ErrTxt", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0.72, 0),
+        Size = UDim2.new(0.8, 0, 0, 44), BackgroundTransparency = 1, Font = Enum.Font.Arcade, TextSize = 34,
+        TextColor3 = Color3.fromRGB(255, 60, 60), Text = "ERRO DE CÂMERA", ZIndex = 5 }, errFrame)
     local camLabel = mk("TextLabel", { Name = "CamLabel", Position = UDim2.new(0, 18, 0, 14), Size = UDim2.new(0, 200, 0, 34),
         BackgroundTransparency = 1, Font = Enum.Font.Arcade, TextSize = 28, TextColor3 = WHITE, TextXAlignment = Enum.TextXAlignment.Left,
         TextStrokeTransparency = 0.4, Text = "CAM 01", ZIndex = 5 }, mon)
@@ -7477,6 +7497,8 @@ function FNAF2.buildHUD(S)
         if ok1 and sticker.Parent then sticker.Image = img1 end
         local ok2, img2 = pcall(resolveImage, FNAF2.CAM_MAP_IMG)
         if ok2 and mapImg.Parent then mapImg.Image = img2 end
+        local ok3, img3 = pcall(resolveImage, FNAF2.ERR_ID)
+        if ok3 and errImg.Parent then errImg.Image = img3 end
         local box = FNAF2.loadAsset(FNAF2.FLASH_ID)
         if box and S.hud then
             S.flashTool = box:FindFirstChildWhichIsA("Tool", true)
@@ -7490,11 +7512,6 @@ function FNAF2.runClock(S, myToken)
     task.spawn(function()
         while FNAF2.token == myToken and FNAF2.S == S and S.hour < 6 do
             if S.clock then S.clock.Text = (S.hour == 0 and "12" or tostring(S.hour)) .. " AM" end
-            if S.hour >= FNAF2.START_HOUR and not S.startedChase then
-                S.startedChase = true
-                S.chasing = true
-                notify("FNAF 2", "Os animatrônicos acordaram... corre!")
-            end
             task.wait(FNAF2.HOUR_SECONDS)
             S.hour += 1
         end
@@ -7507,6 +7524,105 @@ function FNAF2.runClock(S, myToken)
                 Size = UDim2.new(0, 400, 0, 90), BackgroundTransparency = 1, Font = Enum.Font.Arcade, TextSize = 64,
                 TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.2, Text = "6 AM" }, S.hud)
             game:GetService("Debris"):AddItem(big, 5)
+        end
+    end)
+end
+
+-- a câmera sorteada dá ERRO (imagem + som do ERR_ID) antes do Freddy aparecer nela
+function FNAF2.camError(S, ci, myToken)
+    S.errCam = ci
+    FNAF2.snd("rbxassetid://" .. FNAF2.ERR_ID, 4, 4)   -- se o ID for um som, toca; se for imagem, só aparece na tela
+    local t0, on = tick(), false
+    while tick() - t0 < FNAF2.ERR_TIME do
+        if FNAF2.token ~= myToken or FNAF2.S ~= S then return end
+        on = not on
+        local b = S.camBtns and S.camBtns[ci]
+        if b then b.BackgroundColor3 = on and Color3.fromRGB(170, 20, 20) or Color3.fromRGB(30, 30, 30) end   -- botão da CAM pisca vermelho
+        task.wait(0.3)
+    end
+    local b = S.camBtns and S.camBtns[ci]
+    if b then b.BackgroundColor3 = (S.curCam == ci) and Color3.fromRGB(30, 140, 50) or Color3.fromRGB(30, 30, 30) end
+end
+
+-- teleporta o animatrônico pra frente da câmera ci (com chão e sem parede no meio), virado pra câmera
+function FNAF2.stareAt(S, a, ci)
+    local c = S.cams and S.cams[ci]
+    if not c or not a.model or not a.model.Parent then return false end
+    local cpos = c.cf.Position
+    local fwd = Vector3.new(c.cf.LookVector.X, 0, c.cf.LookVector.Z)
+    if fwd.Magnitude < 0.1 then fwd = Vector3.new(0, 0, -1) end
+    fwd = fwd.Unit
+    local wallRp = RaycastParams.new()
+    wallRp.FilterType = Enum.RaycastFilterType.Include
+    wallRp.FilterDescendantsInstances = { S.map }
+    wallRp.RespectCanCollide = true
+    local spot
+    for _, dist in ipairs({ 24, 18, 12, 8 }) do
+        local px, pz = cpos.X + fwd.X * dist, cpos.Z + fwd.Z * dist
+        local g = workspace:Raycast(Vector3.new(px, cpos.Y, pz), Vector3.new(0, -60, 0), S.rp)
+        if g and cpos.Y - g.Position.Y < 16 then
+            local eye = Vector3.new(px, g.Position.Y + 4, pz)
+            if not workspace:Raycast(cpos, eye - cpos, wallRp) then   -- sem parede entre a câmera e ele
+                spot = Vector3.new(px, g.Position.Y + a.hOff, pz)
+                break
+            end
+        end
+    end
+    if not spot then return false end
+    a.model:PivotTo(CFrame.lookAt(spot, Vector3.new(cpos.X, spot.Y, cpos.Z)))   -- olhando pra câmera
+    return true
+end
+
+-- teleporta o animatrônico pro corredor de ataque (FNAF2.ATTACK_POS), virado pra onde você nasce
+function FNAF2.teleportAttack(S, a, i)
+    local ap = FNAF2.ATTACK_POS
+    local x, z = ap.X + (i - 1) * 6, ap.Z
+    local g = workspace:Raycast(Vector3.new(x, ap.Y + 8, z), Vector3.new(0, -40, 0), S.rp)
+    local y = (g and g.Position.Y or (ap.Y - 3)) + a.hOff
+    pcall(function()
+        a.model:PivotTo(CFrame.lookAt(Vector3.new(x, y, z), Vector3.new(S.spawnCF.X, y, S.spawnCF.Z)))
+    end)
+end
+
+-- Freddy fica CALMO no lugar dele. De tempos em tempos: câmera aleatória dá erro -> ele aparece nela e fica olhando.
+-- Depois da câmera ele teleporta pro ATTACK_POS e persegue o alvo (a partir da hora CHASE_HOUR).
+function FNAF2.runDirector(S, myToken)
+    task.spawn(function()
+        local function alive() return FNAF2.token == myToken and FNAF2.S == S and not S.frozen end
+        local function wait2(t)
+            local t0 = tick()
+            while tick() - t0 < t do
+                if not alive() then return false end
+                task.wait(0.25)
+            end
+            return alive()
+        end
+        if not wait2(FNAF2.CAM_FIRST) then return end
+        while alive() do
+            local hour = S.hour or 0
+            local n = S.cams and #S.cams or 0
+            if n > 0 and S.anims[1] and not S.catching then
+                local ci = math.random(1, n)
+                FNAF2.camError(S, ci, myToken)                  -- 1) a câmera dá ERRO
+                if not alive() then S.errCam = nil return end
+                for _, a in ipairs(S.anims) do FNAF2.stareAt(S, a, ci) end   -- 2) ele teleporta e fica olhando
+                S.errCam = nil
+                if not wait2(math.random(FNAF2.STARE_MIN, FNAF2.STARE_MAX)) then return end
+                if hour >= FNAF2.CHASE_HOUR and not S.catching then          -- 3) teleporta pro corredor e vai atrás do alvo
+                    for i, a in ipairs(S.anims) do FNAF2.teleportAttack(S, a, i) end
+                    S.chasing = true
+                    local t0 = tick()
+                    while alive() and S.chasing and tick() - t0 < FNAF2.CHASE_TIME do task.wait(0.25) end
+                    S.chasing = false
+                end
+                for _, a in ipairs(S.anims) do                                 -- 4) volta calmo pro lugar dele
+                    pcall(function()
+                        a.model:PivotTo(CFrame.lookAt(a.home, Vector3.new(S.spawnCF.X, a.home.Y, S.spawnCF.Z)))
+                    end)
+                end
+            end
+            local gap = math.random(FNAF2.CAM_MIN, FNAF2.CAM_MAX) * math.max(0.4, 1 - 0.1 * hour)
+            if not wait2(gap) then return end
         end
     end)
 end
@@ -7571,7 +7687,18 @@ function FNAF2.spawn(partnerName)
     model:PivotTo(CFrame.new(FNAF2.BASE.X, FNAF2.BASE.Y + bs.Y / 2, FNAF2.BASE.Z))
     model.Parent = folder
     S.map = model
-    local spawnCF = FNAF2.findSpawn(model)
+    -- você nasce SEMPRE em FNAF2.SPAWN_POS (virado pro corredor); se o mapa não tiver chão ali, usa o spawn automático
+    local rp0 = RaycastParams.new()
+    rp0.FilterType = Enum.RaycastFilterType.Include
+    rp0.FilterDescendantsInstances = { model }
+    local sres = workspace:Raycast(FNAF2.SPAWN_POS + Vector3.new(0, 8, 0), Vector3.new(0, -40, 0), rp0)
+    local spawnCF
+    if sres then
+        local sp0 = Vector3.new(FNAF2.SPAWN_POS.X, sres.Position.Y + 4, FNAF2.SPAWN_POS.Z)
+        spawnCF = CFrame.lookAt(sp0, sp0 + Vector3.new(0, 0, 30))
+    else
+        spawnCF = FNAF2.findSpawn(model)
+    end
     S.spawnCF = spawnCF
 
     -- ===== animatrônicos =====
@@ -7687,20 +7814,11 @@ function FNAF2.spawn(partnerName)
             end)
             local hOff = a:GetPivot().Position.Y - (acf.Position.Y - asz.Y / 2)   -- distância do pivô até o pé
 
-            -- posição inicial: em volta do ponto de spawn, longe de você
-            local ang = (i / #list) * math.pi * 2
-            local placed
-            for _, radius in ipairs({ 70, 45, 25 }) do
-                local x = spawnCF.X + math.cos(ang) * radius
-                local z = spawnCF.Z + math.sin(ang) * radius
-                local bestP
-                for _, fp in ipairs(FNAF2.floors(x, z, S.topY, S.rayLen, rp)) do
-                    if not bestP or math.abs(fp.Y - spawnCF.Y) < math.abs(bestP.Y - spawnCF.Y) then bestP = fp end
-                end
-                if bestP then placed = Vector3.new(x, bestP.Y + hOff, z) break end
-            end
-            placed = placed or (spawnCF.Position + Vector3.new(math.cos(ang) * 40, 0, math.sin(ang) * 40))
-            a:PivotTo(CFrame.new(placed))
+            -- posição FIXA e calma do Freddy (FNAF2.HOME). Mais de um animatrônico: lado a lado
+            local hx, hz = FNAF2.HOME.X + (i - 1) * 6, FNAF2.HOME.Z
+            local gres = workspace:Raycast(Vector3.new(hx, FNAF2.HOME.Y + 8, hz), Vector3.new(0, -40, 0), rp)
+            local placed = Vector3.new(hx, (gres and gres.Position.Y or (FNAF2.HOME.Y - 3)) + hOff, hz)
+            a:PivotTo(CFrame.lookAt(placed, Vector3.new(spawnCF.X, placed.Y, spawnCF.Z)))
             a.Parent = folder
             local entry = { model = a, hOff = hOff, home = placed, animator = animator, walk = walk, height = asz.Y,
                 radius = math.max(2.5, math.min(asz.X, asz.Z) * 0.35) }
@@ -7756,6 +7874,7 @@ function FNAF2.spawn(partnerName)
     S.cams = FNAF2.buildCams(S, model, spawnCF)
     FNAF2.buildHUD(S)
     FNAF2.runClock(S, myToken)
+    FNAF2.runDirector(S, myToken)
 
     -- ===== perseguição com PATHFINDING: contorna paredes, não atravessa =====
     local PathfindingService = game:GetService("PathfindingService")
@@ -7780,7 +7899,7 @@ function FNAF2.spawn(partnerName)
             if ph and p ~= LocalPlayer then table.insert(targets, { hrp = ph, me = false, name = partnerName }) end
         end
         if #targets == 0 then return end
-        local spd = FNAF2.SPEED * (1 + 0.12 * math.max(0, (S.hour or 0) - FNAF2.START_HOUR))   -- fica mais rápido a cada hora
+        local spd = FNAF2.SPEED * (1 + 0.12 * math.max(0, (S.hour or 0) - FNAF2.CHASE_HOUR))   -- fica mais rápido a cada hora
 
         for _, a in ipairs(S.anims) do
             local m = a.model
@@ -7847,7 +7966,7 @@ function FNAF2.spawn(partnerName)
                                 a.nextPath = 0   -- bateu na parede: pede caminho novo já
                             end
                         end
-                        FNAF2.setWalk(a, moved, now)
+                        FNAF2.setWalk(a, moved, now, spd / FNAF2.SPEED)
                     end
                 end
             end
@@ -7863,7 +7982,7 @@ function FNAF2.spawn(partnerName)
             h.CFrame = spawnCF
         end
     end)
-    notify("FNAF 2", "Pronto! Você está no FNAF 2. É meia-noite: os animatrônicos acordam à(s) " .. FNAF2.START_HOUR .. " AM.")
+    notify("FNAF 2", "Pronto! Você está no FNAF 2. O Freddy está calmo no lugar dele; olhe as câmeras.")
     return true
 end
 
