@@ -8690,6 +8690,22 @@ function processNetMessage(msg, senderName)
         return
     end
 
+    -- >>> NOLI: todo cliente com o script vê o monstro <<<
+    if action == "NOLI_SPAWN" then
+        if target and senderName ~= LocalPlayer.Name then
+            task.spawn(function() pcall(NOLI.run, senderName, target) end)
+        end
+        return
+    end
+    if action == "NOLI_CLEAR" then
+        NOLI.clearLocal(true)
+        return
+    end
+    if action == "NOLI_FEINT" then
+        NOLI.feintLocal()
+        return
+    end
+
     if action == "KAMUI" or action == "COOLKID_EFFECT" then
         if target == "ALL" or target == LocalPlayer.Name or senderName == LocalPlayer.Name or target == selectedPlayerName then
             task.spawn(function() pcall(function() executeActionLocally(action, senderName, target or extraArg) end) end)
@@ -10081,10 +10097,685 @@ function FantasmaGoner.relearn()
     FantasmaGoner.activate()
 end
 
+-- ================== MONSTRO: NOLI (modelo 140625681515398) ==================
+-- Poderes: Stab (ataque básico), Nova (projétil Void Star), Void Rush (investida),
+-- Observant (aviso antes de chegar) e Alucinações (efeito só na tela de quem é perseguido).
+NOLI = { busy = false, cancelFlag = false, cdEnd = 0, token = 0, S = nil,
+    MODEL_ID  = "77070809853563",                              -- modelo do Noli
+    JUMP_IDS  = { "110927500079647", "85842282862173" },        -- jumpscares (aparecem com glitch na tela do alvo)
+    LOAD_BG   = "117917201966243",                              -- fundo da tela de carregamento
+    
+do
+    local TweenService = game:GetService("TweenService")
+    local Debris       = game:GetService("Debris")
+
+    local COOLDOWN    = 15     -- recarga (s) depois que o Noli vai embora
+    local DURATION    = 40     -- tempo que ele persegue (s)
+    local SPEED       = 15     -- velocidade normal de aproximação
+    local MELEE_RANGE = 9      -- distância do Stab
+    local NOVA_RANGE  = 70     -- distância máxima da Nova (Void Star)
+    local RUSH_DIST   = 45     -- distância a partir da qual ele faz o Void Rush (corrida, NÃO é teleporte)
+    local RUSH_SPEED  = 55     -- studs/s durante o Void Rush (corrida rápida no chão, não um "pulo" instantâneo)
+    local STAB_CD, NOVA_CD, RUSH_CD = 1.4, 6, 7
+    -- Observant = o ÚNICO teleporte real do Noli, e tem recarga de verdade (como no Forsaken):
+    local OBSERVANT_INITIAL_CD = 25   -- recarga logo no início (a entrada já conta como o 1º uso)
+    local OBSERVANT_CD         = 30   -- recarga normal depois de cada teleporte real
+    local OBSERVANT_FEINT_CD   = 15   -- recarga reduzida se ele fingiu antes (finta)
+    local OBSERVANT_DIST       = 90   -- só teleporta de verdade se o alvo estiver bem longe (tipo "sumiu")
+    local TELEGRAPH_TIME       = 1.1  -- aviso no chão antes do teleporte
+
+    local PURPLE = Color3.fromRGB(168, 85, 247)
+    local DARK   = Color3.fromRGB(18, 8, 28)
+    local VOIDW  = Color3.new(1, 1, 1)
+
+    local function fetchObjects(id)
+        for _, url in ipairs({ "rbxassetid://" .. id, "http://www.roblox.com/asset/?id=" .. id }) do
+            local ok, objs = pcall(function() return game:GetObjects(url) end)
+            if ok and objs and #objs > 0 then return objs end
+        end
+        local ok2, mdl = pcall(function() return game:GetService("InsertService"):LoadAsset(tonumber(id)) end)
+        if ok2 and mdl then
+            local kids = mdl:GetChildren()
+            if #kids > 0 then return kids end
+        end
+        return nil
+    end
+
+    local cache
+    local function loadNoliTemplate()
+        if cache ~= nil then return cache or nil end
+        local objs = fetchObjects(NOLI.MODEL_ID)
+        local tpl
+        if objs then
+            local m = Instance.new("Model")
+            for _, o in ipairs(objs) do o.Parent = m end
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("LuaSourceContainer") or d:IsA("ProximityPrompt") then pcall(function() d:Destroy() end) end
+            end
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then tpl = m break end
+            end
+        end
+        cache = tpl or false
+        if not tpl then notify("Noli", "Não consegui carregar o modelo (ID " .. NOLI.MODEL_ID .. ").") end
+        return tpl
+    end
+
+    -- acha o chão abaixo de um ponto (pra ele andar/teleportar grudado no chão, não flutuando)
+    local groundRP = RaycastParams.new()   -- reaproveitado (criar um novo por frame pesa no GC e trava o jogo)
+    groundRP.FilterType = Enum.RaycastFilterType.Exclude
+    local function groundY(pos, ignoreFolder, fallbackY)
+        groundRP.FilterDescendantsInstances = { ignoreFolder }
+        local res = workspace:Raycast(pos + Vector3.new(0, 6, 0), Vector3.new(0, -60, 0), groundRP)
+        if res then return res.Position.Y end
+        return fallbackY
+    end
+
+    -- aviso roxo/branco no chão antes dele chegar (Observant)
+    local function warningMark(pos, parent)
+        local p = Instance.new("Part")
+        p.Shape, p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch = Enum.PartType.Cylinder, true, false, false, false
+        p.Material, p.Color, p.Transparency = Enum.Material.Neon, PURPLE, 0.25
+        p.Size = Vector3.new(0.2, 1, 1)
+        p.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+        p.Parent = parent
+        local l = Instance.new("PointLight", p)
+        l.Color, l.Range, l.Brightness = PURPLE, 14, 3
+        TweenService:Create(p, TweenInfo.new(1.1, Enum.EasingStyle.Quad), { Size = Vector3.new(0.2, 22, 22), Transparency = 1 }):Play()
+        Debris:AddItem(p, 1.3)
+    end
+
+    -- rastro roxo/preto do Void Rush
+    local function rushTrail(model)
+        local root = model.PrimaryPart
+        if not root then return end
+        local a0 = Instance.new("Attachment", root)
+        local tr = Instance.new("Trail")
+        tr.Attachment0, tr.Attachment1 = a0, a0
+        tr.Lifetime, tr.MinLength = 0.35, 0
+        tr.Color = ColorSequence.new(PURPLE, DARK)
+        tr.Transparency = NumberSequence.new(0.2, 1)
+        tr.WidthScale = NumberSequence.new(1, 0)
+        tr.Parent = root
+    end
+
+    -- tentáculo de sombra (Stab)
+    local function stabFX(origin, target)
+        local dist = (target - origin).Magnitude
+        if dist < 0.3 then return end
+        local p = Instance.new("Part")
+        p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch = true, false, false, false
+        p.Material, p.Color, p.Transparency = Enum.Material.Neon, Color3.fromRGB(60, 10, 90), 0.1
+        p.Size = Vector3.new(0.6, 0.6, 0.2)
+        p.CFrame = CFrame.lookAt(origin, target)
+        p.Parent = workspace
+        local goal = p.CFrame * CFrame.new(0, 0, -dist)
+        TweenService:Create(p, TweenInfo.new(0.12, Enum.EasingStyle.Quad), { Size = Vector3.new(0.6, 0.6, dist), CFrame = goal }):Play()
+        task.delay(0.16, function()
+            local okt, t = pcall(function() return TweenService:Create(p, TweenInfo.new(0.15), { Transparency = 1 }) end)
+            if okt then t:Play() end
+        end)
+        Debris:AddItem(p, 0.4)
+    end
+
+    -- Void Star arremessada + onda de choque (Nova)
+    local function novaFX(origin, dest)
+        local star = Instance.new("Part")
+        star.Shape, star.Anchored, star.CanCollide, star.CanQuery, star.CanTouch = Enum.PartType.Ball, true, false, false, false
+        star.Material, star.Color, star.Size = Enum.Material.Neon, VOIDW, Vector3.new(1.4, 1.4, 1.4)
+        star.CFrame = CFrame.new(origin)
+        star.Parent = workspace
+        local l = Instance.new("PointLight", star)
+        l.Color, l.Range, l.Brightness = PURPLE, 18, 4
+        local trw = TweenService:Create(star, TweenInfo.new(0.55, Enum.EasingStyle.Linear), { CFrame = CFrame.new(dest) })
+        trw:Play()
+        trw.Completed:Connect(function()
+            pcall(function() star:Destroy() end)
+            for _, cfg in ipairs({
+                { VOIDW, 0.1, 10 },
+                { PURPLE, 0.3, 16 },
+            }) do
+                local ball = Instance.new("Part")
+                ball.Shape, ball.Anchored, ball.CanCollide, ball.CanQuery, ball.CanTouch = Enum.PartType.Ball, true, false, false, false
+                ball.Material, ball.Color, ball.Transparency = Enum.Material.Neon, cfg[1], cfg[2]
+                ball.Size, ball.CFrame = Vector3.new(1, 1, 1), CFrame.new(dest)
+                ball.Parent = workspace
+                TweenService:Create(ball, TweenInfo.new(0.4, Enum.EasingStyle.Quad), { Size = Vector3.new(1, 1, 1) * cfg[3], Transparency = 1 }):Play()
+                Debris:AddItem(ball, 0.5)
+            end
+        end)
+    end
+
+    -- Alucinações: só na tela de quem está sendo perseguido
+    local function startHallucinations(S)
+        local pg = LocalPlayer:WaitForChild("PlayerGui")
+        local old = pg:FindFirstChild("NoliHallucination")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name, gui.IgnoreGuiInset, gui.ResetOnSpawn, gui.DisplayOrder = "NoliHallucination", true, false, 500
+        local tint = Instance.new("Frame", gui)
+        tint.Size, tint.BackgroundColor3, tint.BorderSizePixel = UDim2.new(1, 0, 1, 0), Color3.fromRGB(40, 0, 60), 0
+        tint.BackgroundTransparency = 0.9
+        local clockLbl = Instance.new("TextLabel", gui)
+        clockLbl.AnchorPoint, clockLbl.Position = Vector2.new(1, 0), UDim2.new(1, -16, 0, 12)
+        clockLbl.Size, clockLbl.BackgroundTransparency = UDim2.new(0, 140, 0, 32), 1
+        clockLbl.Font, clockLbl.TextSize, clockLbl.TextColor3 = Enum.Font.Code, 22, PURPLE
+        clockLbl.TextXAlignment, clockLbl.Text = Enum.TextXAlignment.Right, "00:00"
+        local clones = {}
+        for i = 1, 3 do
+            local c = Instance.new("Frame", gui)
+            c.Size = UDim2.new(0, 46, 0, 120)
+            c.BackgroundColor3, c.BackgroundTransparency = DARK, 1
+            local strk = Instance.new("UIStroke", c)
+            strk.Color, strk.Thickness, strk.Transparency = PURPLE, 2, 0.3
+            clones[i] = c
+        end
+        gui.Parent = pg
+        S.hallucGui = gui
+        local hallucAcc = 0
+        S.hallucConn = RunService.Heartbeat:Connect(function(dt)
+            hallucAcc = hallucAcc + dt
+            if hallucAcc < 0.05 then return end   -- ~20x/s: suave o bastante e bem mais leve que todo frame
+            hallucAcc = 0
+            tint.BackgroundTransparency = (math.random() < 0.06) and (0.75 + math.random() * 0.2) or 0.94
+            if math.random() < 0.03 then
+                clockLbl.Text = string.format("%02d:%02d", math.random(0, 99), math.random(0, 99))
+                clockLbl.TextColor3 = (math.random() < 0.5) and PURPLE or Color3.new(1, 1, 1)
+            end
+            for _, c in ipairs(clones) do
+                if math.random() < 0.015 then
+                    c.Position = UDim2.new(math.random(), math.random(-40, 40), math.random(), math.random(-40, 40))
+                    c.BackgroundTransparency = 0
+                    task.delay(0.12 + math.random() * 0.2, function() if c.Parent then c.BackgroundTransparency = 1 end end)
+                end
+            end
+        end)
+    end
+
+    local function stopHallucinations(S)
+        if S.hallucConn then pcall(function() S.hallucConn:Disconnect() end) S.hallucConn = nil end
+        if S.hallucGui then pcall(function() S.hallucGui:Destroy() end) S.hallucGui = nil end
+    end
+
+    local ContentProvider = game:GetService("ContentProvider")
+    local SoundService    = game:GetService("SoundService")
+
+    local LOADING_TIME = 4.5   -- tempo mínimo da tela de carregamento (s)
+    local JUMP_MIN, JUMP_MAX = 8, 16   -- intervalo (s) entre jumpscares aleatórios na tela do alvo
+    local JUMP_STAB_CHANCE = 0.2       -- chance de dar jumpscare junto com um Stab
+
+    -- imagem (resolve Decal -> textura quando precisa)
+    local function imgOf(id)
+        local ok, r = pcall(resolveImage, id)
+        if ok and r and r ~= "" then return r end
+        return "rbxassetid://" .. tostring(id)
+    end
+
+    -- testa se o ID é um SOM (retorna o Sound carregado) ou não (nil). Scripts de assets NÃO são executados.
+    local function probeSound(id)
+        local sd = Instance.new("Sound")
+        sd.SoundId, sd.Volume = "rbxassetid://" .. id, 1
+        pcall(function() ContentProvider:PreloadAsync({ sd }) end)
+        local t0 = os.clock()
+        while sd.TimeLength <= 0 and os.clock() - t0 < 3 do task.wait(0.1) end
+        if sd.TimeLength > 0 then return sd end
+        pcall(function() sd:Destroy() end)
+        return nil
+    end
+
+    -- tenta usar o ID extra como ANIMAÇÃO no rig do Noli (só se o modelo tiver Motor6D)
+    local function tryAnimation(clone)
+        local motors, isP1, hasJoint = {}, {}, {}
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("Motor6D") then
+                table.insert(motors, d)
+                if d.Part1 then isP1[d.Part1] = true; hasJoint[d.Part1] = true end
+                if d.Part0 then hasJoint[d.Part0] = true end
+            elseif d:IsA("Weld") then
+                if d.Part0 then hasJoint[d.Part0] = true end
+                if d.Part1 then hasJoint[d.Part1] = true end
+            elseif d:IsA("WeldConstraint") then
+                if d.Part0 then hasJoint[d.Part0] = true end
+                if d.Part1 then hasJoint[d.Part1] = true end
+            end
+        end
+        if #motors == 0 then return nil end
+        local ac = clone:FindFirstChildWhichIsA("Humanoid", true) or clone:FindFirstChildWhichIsA("AnimationController", true)
+        if not ac then
+            ac = Instance.new("AnimationController")
+            ac.Parent = clone
+        end
+        local animator = ac:FindFirstChildOfClass("Animator") or Instance.new("Animator", ac)
+        local an = Instance.new("Animation")
+        an.AnimationId = "rbxassetid://" .. NOLI.EXTRA_ID
+        local ok, tr = pcall(function() return animator:LoadAnimation(an) end)
+        if not ok or not tr then return nil end
+        local t0 = os.clock()
+        while tr.Length <= 0 and os.clock() - t0 < 3 do task.wait(0.1) end
+        if tr.Length <= 0 then return nil end
+        -- deu certo: solta as peças ligadas por juntas (só a raiz do rig fica travada) pra animação mexer
+        local rigRoots = {}
+        for _, m in ipairs(motors) do
+            if m.Part0 and not isP1[m.Part0] then rigRoots[m.Part0] = true end
+        end
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BasePart") and hasJoint[d] and not rigRoots[d] then d.Anchored = false end
+        end
+        tr.Looped = true
+        tr.Priority = Enum.AnimationPriority.Movement
+        return tr
+    end
+
+    -- TELA DE CARREGAMENTO: fundo com imagem + barra bonita embaixo. Mostra o progresso real (pré-carga) e um tempo mínimo.
+    local function loadingScreen(S, myToken, steps, minTime)
+        local pg = LocalPlayer:WaitForChild("PlayerGui")
+        local old = pg:FindFirstChild("NoliLoading")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name, gui.IgnoreGuiInset, gui.ResetOnSpawn, gui.DisplayOrder = "NoliLoading", true, false, 2000
+        local root = Instance.new("CanvasGroup", gui)
+        root.Size, root.BackgroundColor3, root.BorderSizePixel, root.GroupTransparency = UDim2.new(1, 0, 1, 0), Color3.new(0, 0, 0), 0, 1
+        local bg = Instance.new("ImageLabel", root)
+        bg.Size, bg.BackgroundTransparency, bg.ScaleType = UDim2.new(1, 0, 1, 0), 1, Enum.ScaleType.Crop
+        local dim = Instance.new("Frame", root)
+        dim.Size, dim.BackgroundColor3, dim.BackgroundTransparency, dim.BorderSizePixel = UDim2.new(1, 0, 1, 0), Color3.new(0, 0, 0), 0.5, 0
+        local shade = Instance.new("Frame", root)
+        shade.AnchorPoint, shade.Position, shade.Size = Vector2.new(0, 1), UDim2.new(0, 0, 1, 0), UDim2.new(1, 0, 0.38, 0)
+        shade.BackgroundColor3, shade.BorderSizePixel = Color3.new(0, 0, 0), 0
+        local sg = Instance.new("UIGradient", shade)
+        sg.Rotation = 90
+        sg.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.1) })
+
+        local title = Instance.new("TextLabel", root)
+        title.AnchorPoint, title.Position, title.Size = Vector2.new(0.5, 0.5), UDim2.new(0.5, 0, 0.4, 0), UDim2.new(0.9, 0, 0, 90)
+        title.BackgroundTransparency, title.Font, title.TextSize = 1, Enum.Font.GothamBlack, 78
+        title.TextColor3, title.Text = Color3.new(1, 1, 1), "NOLI"
+        local ts = Instance.new("UIStroke", title)
+        ts.Color, ts.Thickness = PURPLE, 3
+        local sub = Instance.new("TextLabel", root)
+        sub.AnchorPoint, sub.Position, sub.Size = Vector2.new(0.5, 0.5), UDim2.new(0.5, 0, 0.5, 0), UDim2.new(0.9, 0, 0, 30)
+        sub.BackgroundTransparency, sub.Font, sub.TextSize = 1, Enum.Font.GothamMedium, 20
+        sub.TextColor3, sub.Text = Color3.fromRGB(210, 180, 255), "Algo está se aproximando..."
+
+        local label = Instance.new("TextLabel", root)
+        label.AnchorPoint, label.Position, label.Size = Vector2.new(0, 1), UDim2.new(0.2, 0, 0.915, 0), UDim2.new(0.4, 0, 0, 24)
+        label.BackgroundTransparency, label.Font, label.TextSize = 1, Enum.Font.GothamBold, 16
+        label.TextColor3, label.TextXAlignment, label.Text = Color3.new(1, 1, 1), Enum.TextXAlignment.Left, "Carregando..."
+        local pct = Instance.new("TextLabel", root)
+        pct.AnchorPoint, pct.Position, pct.Size = Vector2.new(1, 1), UDim2.new(0.8, 0, 0.915, 0), UDim2.new(0.2, 0, 0, 24)
+        pct.BackgroundTransparency, pct.Font, pct.TextSize = 1, Enum.Font.GothamBold, 16
+        pct.TextColor3, pct.TextXAlignment, pct.Text = PURPLE, Enum.TextXAlignment.Right, "0%"
+
+        local barBg = Instance.new("Frame", root)
+        barBg.AnchorPoint, barBg.Position, barBg.Size = Vector2.new(0.5, 1), UDim2.new(0.5, 0, 0.95, 0), UDim2.new(0.6, 0, 0, 20)
+        barBg.BackgroundColor3, barBg.BorderSizePixel = Color3.fromRGB(16, 6, 28), 0
+        Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+        local bs = Instance.new("UIStroke", barBg)
+        bs.Color, bs.Thickness = PURPLE, 2
+        local fill = Instance.new("Frame", barBg)
+        fill.Size, fill.BorderSizePixel = UDim2.new(0, 0, 1, 0), 0
+        fill.BackgroundColor3 = Color3.new(1, 1, 1)
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+        local fg = Instance.new("UIGradient", fill)
+        fg.Color = ColorSequence.new(Color3.fromRGB(110, 40, 200), Color3.fromRGB(235, 210, 255))
+
+        gui.Parent = pg
+        S.loadGui = gui
+        TweenService:Create(root, TweenInfo.new(0.35), { GroupTransparency = 0 }):Play()
+        task.spawn(function()
+            local im = imgOf(NOLI.LOAD_BG)
+            if bg.Parent then bg.Image = im end
+        end)
+
+        local done, total = 0, #steps
+        for _, fn in ipairs(steps) do
+            task.spawn(function() pcall(fn) done = done + 1 end)
+        end
+        local t0, shown = os.clock(), 0
+        while NOLI.token == myToken do
+            local el = os.clock() - t0
+            local real = (total > 0) and (done / total) or 1
+            local goal = math.min(real, math.clamp(el / minTime, 0, 1))
+            if el > minTime + 10 then goal = 1 end   -- trava de segurança: nunca prende pra sempre
+            local dt = RunService.Heartbeat:Wait()
+            shown = shown + (goal - shown) * math.min(1, dt * 6)
+            fill.Size = UDim2.new(shown, 0, 1, 0)
+            pct.Text = string.format("%d%%", math.floor(shown * 100 + 0.5))
+            if goal >= 1 and shown > 0.995 then break end
+        end
+        if NOLI.token == myToken then
+            fill.Size, pct.Text, label.Text = UDim2.new(1, 0, 1, 0), "100%", "Pronto!"
+            task.wait(0.3)
+            TweenService:Create(root, TweenInfo.new(0.45), { GroupTransparency = 1 }):Play()
+            task.wait(0.5)
+        end
+        pcall(function() gui:Destroy() end)
+        S.loadGui = nil
+    end
+
+    -- JUMPSCARE com GLITCH na tela do alvo: a imagem some e volta várias vezes e não fica parada
+    local function jumpscareGlitch(S)
+        if not S.jumpImgs or #S.jumpImgs == 0 then return end
+        if os.clock() - (S.lastJump or 0) < 2.5 then return end
+        S.lastJump = os.clock()
+        local pg = LocalPlayer:WaitForChild("PlayerGui")
+        local old = pg:FindFirstChild("NoliJumpscare")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name, gui.IgnoreGuiInset, gui.ResetOnSpawn, gui.DisplayOrder = "NoliJumpscare", true, false, 1500
+        local bgf = Instance.new("Frame", gui)
+        bgf.Size, bgf.BackgroundColor3, bgf.BorderSizePixel, bgf.BackgroundTransparency = UDim2.new(1, 0, 1, 0), Color3.new(0, 0, 0), 0, 0.2
+        local im = Instance.new("ImageLabel", gui)
+        im.AnchorPoint, im.Position, im.Size = Vector2.new(0.5, 0.5), UDim2.new(0.5, 0, 0.5, 0), UDim2.new(1.1, 0, 1.1, 0)
+        im.BackgroundTransparency, im.ScaleType = 1, Enum.ScaleType.Crop
+        im.Image = S.jumpImgs[math.random(1, #S.jumpImgs)]
+        gui.Parent = pg
+        S.jumpGui = gui
+        if S.jumpSound then
+            pcall(function()
+                local c = S.jumpSound:Clone()
+                c.Volume = 4
+                c.Parent = SoundService
+                c:Play()
+                Debris:AddItem(c, 5)
+            end)
+        end
+        task.spawn(function()
+            local tints = { Color3.new(1, 1, 1), Color3.fromRGB(255, 130, 255), Color3.fromRGB(255, 70, 70), Color3.fromRGB(140, 255, 255) }
+            for _ = 1, math.random(12, 18) do
+                if not gui.Parent then return end
+                local on = math.random() < 0.6
+                gui.Enabled = on
+                if on then
+                    local sc = 1.05 + math.random() * 0.25
+                    im.Size = UDim2.new(sc, 0, sc, 0)
+                    im.Position = UDim2.new(0.5, math.random(-35, 35), 0.5, math.random(-35, 35))
+                    im.Rotation = math.random(-4, 4)
+                    im.ImageColor3 = tints[math.random(1, #tints)]
+                    if #S.jumpImgs > 1 and math.random() < 0.3 then im.Image = S.jumpImgs[math.random(1, #S.jumpImgs)] end
+                end
+                task.wait(0.03 + math.random() * 0.09)
+            end
+            pcall(function() gui:Destroy() end)
+            if S.jumpGui == gui then S.jumpGui = nil end
+        end)
+    end
+
+    function NOLI.cooldownLeft()
+        return math.max(NOLI.cdEnd - os.clock(), 0)
+    end
+
+    -- limpa o Noli no cliente atual (roda em todo mundo com o script)
+    function NOLI.clearLocal(silent)
+        NOLI.token = NOLI.token + 1
+        local S = NOLI.S
+        NOLI.S, NOLI.busy = nil, false
+        if S then
+            if S.conn then pcall(function() S.conn:Disconnect() end) end
+            stopHallucinations(S)
+            for _, k in ipairs({ "loadGui", "jumpGui", "theme" }) do
+                if S[k] then pcall(function() S[k]:Destroy() end) S[k] = nil end
+            end
+            if S.animTrack then pcall(function() S.animTrack:Stop() end) end
+            if S.folder then pcall(function() S.folder:Destroy() end) end
+        end
+        if S and not silent then notify("Noli", "O Noli foi embora.") end
+    end
+
+    function NOLI.cancelAll()
+        NOLI.clearLocal(true)
+        sendNetCmd(";NOLI_CLEAR ALL")
+    end
+
+    -- ADMIN: manda o Noli perseguir `target`
+    function NOLI.cast(target)
+        if not target or target == "" then return false end
+        if NOLI.busy then notify("Noli", "O Noli já está ativo.") return false end
+        local left = NOLI.cooldownLeft()
+        if left > 0 then notify("Noli", "Em recarga: " .. math.ceil(left) .. "s") return false end
+        task.spawn(function() pcall(NOLI.run, LocalPlayer.Name, target) end)
+        sendNetCmd(";NOLI_SPAWN " .. target)
+        return true
+    end
+
+    -- roda em TODO cliente com o hub (admin direto + os outros via rede)
+    function NOLI.run(senderName, targetName)
+        -- trava ANTES de qualquer espera (evita 2 Nolis quando duas chamadas chegam quase juntas)
+        if NOLI.busy then return end
+        NOLI.busy = true
+        NOLI.cancelFlag, NOLI.token = false, NOLI.token + 1
+        local myToken = NOLI.token
+        local targetPlr = Players:FindFirstChild(targetName)
+        if not targetPlr then NOLI.clearLocal(true) return end
+        local tChar = targetPlr.Character or targetPlr.CharacterAdded:Wait()
+        local tHrp = tChar:WaitForChild("HumanoidRootPart", 5)
+        local tHum = tChar:FindFirstChildOfClass("Humanoid")
+        if not tHrp or not tHum then NOLI.clearLocal(true) return end
+        if NOLI.token ~= myToken then return end
+
+        -- limpa qualquer Noli esquecido de uma corrida antiga, se sobrou algum
+        for _, f in ipairs(workspace:GetChildren()) do
+            if f.Name:sub(1, 5) == "NOLI_" then pcall(function() f:Destroy() end) end
+        end
+
+        local iAmTarget = (LocalPlayer.Name == targetName)
+        local hearing = iAmTarget or senderName == LocalPlayer.Name   -- quem vê a tela de carregamento / ouve o som
+
+        local folder = Instance.new("Folder")
+        folder.Name = "NOLI_" .. myToken
+        folder.Parent = workspace
+        local S = { folder = folder, tHrp = tHrp, feinted = false, jumpImgs = {} }
+        NOLI.S = S
+
+        -- ===== CARREGAMENTO (barra) + pré-carga do modelo, jumpscares e som/animação extra =====
+        local tpl
+        local steps = {
+            function() tpl = loadNoliTemplate() end,
+            function() for _, id in ipairs(NOLI.JUMP_IDS) do table.insert(S.jumpImgs, imgOf(id)) end end,
+            function()
+                local sd = probeSound(NOLI.EXTRA_ID)
+                if sd then
+                    if sd.TimeLength > 10 then S.themeTpl = sd else S.jumpSound = sd end   -- som longo = tema; curto = som do jumpscare
+                else
+                    S.extraMaybeAnim = true   -- não é som: será testado como animação no rig do Noli
+                end
+            end,
+        }
+        if hearing then
+            loadingScreen(S, myToken, steps, LOADING_TIME)
+        else
+            local done = 0
+            for _, fn in ipairs(steps) do task.spawn(function() pcall(fn) done = done + 1 end) end
+            local t0 = os.clock()
+            while (done < #steps or os.clock() - t0 < LOADING_TIME) and os.clock() - t0 < LOADING_TIME + 10 do
+                task.wait(0.1)
+                if NOLI.token ~= myToken then return end
+            end
+        end
+        if NOLI.token ~= myToken then return end
+        if iAmTarget then startHallucinations(S) end
+
+        -- ===== ENTRADA = o 1º uso do Observant (teleporte real): aviso no chão, depois ele aparece =====
+        local behind = -tHrp.CFrame.LookVector
+        local groundNear = groundY(tHrp.Position + behind * 28, folder, tHrp.Position.Y - 3)
+        local curPos = Vector3.new(tHrp.Position.X + behind.X * 28, groundNear, tHrp.Position.Z + behind.Z * 28)
+        warningMark(tHrp.Position, folder)
+        task.wait(TELEGRAPH_TIME)
+        if NOLI.token ~= myToken then return end
+        S.nextObservant = os.clock() + OBSERVANT_INITIAL_CD
+
+        local model = Instance.new("Model")
+        model.Name = "Noli"
+        local root = Instance.new("Part")
+        root.Name, root.Size, root.Transparency = "Root", Vector3.new(2, 2, 2), 1
+        root.Anchored, root.CanCollide, root.CanTouch = true, false, false
+        root.Parent = model
+        model.PrimaryPart = root
+        local hOff, cloneRef = 0, nil
+        if tpl then
+            local clone = tpl:Clone()
+            for _, d in ipairs(clone:GetDescendants()) do
+                if d:IsA("BasePart") then d.Anchored, d.CanCollide = true, false end
+            end
+            clone.Parent = model
+            local cf, size = clone:GetBoundingBox()
+            root.CFrame = CFrame.new(cf.Position.X, cf.Position.Y - size.Y / 2, cf.Position.Z)
+            hOff = size.Y / 2
+            cloneRef = clone
+        else
+            root.Transparency, root.Size, root.Color, root.Material = 0.2, Vector3.new(3, 7, 3), Color3.fromRGB(20, 5, 35), Enum.Material.Neon
+            hOff = 3.5
+        end
+        local function draw(lookTarget)
+            model:PivotTo(CFrame.lookAt(curPos + Vector3.new(0, hOff, 0), lookTarget + Vector3.new(0, hOff, 0)))
+        end
+        draw(tHrp.Position)
+        model.Parent = folder
+        rushTrail(model)
+
+        -- animação extra (se o ID extra for uma animação que funcione no rig)
+        local animTrack
+        if S.extraMaybeAnim and cloneRef then
+            task.spawn(function()
+                local tr = tryAnimation(cloneRef)
+                if tr and NOLI.token == myToken then animTrack = tr S.animTrack = tr end
+            end)
+        end
+        local function setAnim(on)
+            local tr = animTrack
+            if not tr then return end
+            if on and not tr.IsPlaying then pcall(function() tr:Play() end)
+            elseif not on and tr.IsPlaying then pcall(function() tr:Stop() end) end
+        end
+
+        -- tema sonoro (se o ID extra for um som longo)
+        if hearing and S.themeTpl then
+            pcall(function()
+                local th = S.themeTpl:Clone()
+                th.Looped, th.Volume = true, 0.6
+                th.Parent = SoundService
+                th:Play()
+                S.theme = th
+            end)
+        end
+
+        local rushUntil, nextStab, nextNova = 0, 0, os.clock() + 2
+        local telegraphing = false
+        local startT = os.clock()
+        S.conn = RunService.Heartbeat:Connect(function(dt)
+            if NOLI.token ~= myToken then return end
+            if os.clock() - startT > DURATION then NOLI.clearLocal() return end
+            if not tChar.Parent or tHum.Health <= 0 or not tHrp.Parent then NOLI.clearLocal() return end
+            if telegraphing then setAnim(false) return end
+
+            local dist = (Vector3.new(tHrp.Position.X, curPos.Y, tHrp.Position.Z) - curPos).Magnitude
+            local now = os.clock()
+            local moving = false
+
+            if now < rushUntil then
+                -- Void Rush: CORRIDA rápida (não teleporte), sempre grudado no chão
+                local dir = Vector3.new(tHrp.Position.X - curPos.X, 0, tHrp.Position.Z - curPos.Z)
+                if dir.Magnitude > 0.1 then
+                    dir = dir.Unit
+                    local nx, nz = curPos.X + dir.X * RUSH_SPEED * dt, curPos.Z + dir.Z * RUSH_SPEED * dt
+                    curPos = Vector3.new(nx, groundY(Vector3.new(nx, curPos.Y, nz), folder, curPos.Y), nz)
+                    draw(tHrp.Position)
+                    moving = true
+                end
+            elseif dist > OBSERVANT_DIST and now >= (S.nextObservant or 0) then
+                -- OBSERVANT: o único teleporte real, com a recarga de verdade (telegrafa antes de chegar)
+                telegraphing = true
+                warningMark(tHrp.Position, folder)
+                task.delay(TELEGRAPH_TIME, function()
+                    if NOLI.token ~= myToken then return end
+                    local b2 = -tHrp.CFrame.LookVector
+                    local gy = groundY(tHrp.Position + b2 * (MELEE_RANGE + 6), folder, tHrp.Position.Y - 3)
+                    curPos = Vector3.new(tHrp.Position.X + b2.X * (MELEE_RANGE + 6), gy, tHrp.Position.Z + b2.Z * (MELEE_RANGE + 6))
+                    draw(tHrp.Position)
+                    S.nextObservant = os.clock() + (S.feinted and OBSERVANT_FEINT_CD or OBSERVANT_CD)
+                    S.feinted = false
+                    telegraphing = false
+                end)
+            elseif dist > RUSH_DIST and now >= (S.nextRush or 0) then
+                rushUntil, S.nextRush = now + 1.1, now + RUSH_CD
+            elseif dist <= MELEE_RANGE then
+                if now >= nextStab then
+                    nextStab = now + STAB_CD
+                    stabFX(curPos + Vector3.new(0, hOff, 0), tHrp.Position)
+                    if iAmTarget then
+                        pcall(function() tHum:TakeDamage(18) end)
+                        if math.random() < JUMP_STAB_CHANCE then jumpscareGlitch(S) end
+                    end
+                end
+            else
+                local dir = Vector3.new(tHrp.Position.X - curPos.X, 0, tHrp.Position.Z - curPos.Z)
+                if dir.Magnitude > 0.1 then
+                    dir = dir.Unit
+                    local nx, nz = curPos.X + dir.X * SPEED * dt, curPos.Z + dir.Z * SPEED * dt
+                    curPos = Vector3.new(nx, groundY(Vector3.new(nx, curPos.Y, nz), folder, curPos.Y), nz)
+                    draw(tHrp.Position)
+                    moving = true
+                end
+                if dist <= NOVA_RANGE and now >= nextNova then
+                    nextNova = now + NOVA_CD
+                    local from = curPos + Vector3.new(0, hOff + 1, 0)
+                    novaFX(from, tHrp.Position + Vector3.new(0, 2, 0))
+                    if iAmTarget then
+                        task.delay(0.55, function()
+                            if NOLI.token == myToken then pcall(function() tHum:TakeDamage(22) end) end
+                        end)
+                    end
+                end
+            end
+            setAnim(moving)
+        end)
+
+        -- jumpscares aleatórios (com glitch) na tela do alvo
+        if iAmTarget then
+            task.spawn(function()
+                while NOLI.token == myToken do
+                    task.wait(JUMP_MIN + math.random() * (JUMP_MAX - JUMP_MIN))
+                    if NOLI.token ~= myToken then break end
+                    jumpscareGlitch(S)
+                end
+            end)
+        end
+
+        task.delay(DURATION + 1, function()
+            if NOLI.token == myToken then NOLI.clearLocal() end
+        end)
+        if senderName == LocalPlayer.Name then NOLI.cdEnd = os.clock() + COOLDOWN + DURATION end
+    end
+
+    -- FINTA: mostra o aviso do Observant sem teleportar de verdade. Se o próximo teleporte vier logo
+    -- depois de uma finta, a recarga dele fica mais curta (15s), igual no Forsaken.
+    function NOLI.feintLocal()
+        local S = NOLI.S
+        if not S or not S.tHrp then return end
+        warningMark(S.tHrp.Position, S.folder)
+        S.feinted = true
+    end
+
+    function NOLI.feint()
+        if not NOLI.busy then notify("Noli", "O Noli não está ativo.") return end
+        task.spawn(NOLI.feintLocal)
+        sendNetCmd(";NOLI_FEINT ALL")
+    end
+end
+
 local function triggerCommand(action, target, extraArg)
     if not target or target == "" then return end
     if action == "GOJO_DOMAIN" then
         GOJO.cast(target)
+        return
+    elseif action == "NOLI_SPAWN" then
+        NOLI.cast(target)
+        return
+    elseif action == "NOLI_CLEAR" then
+        NOLI.cancelAll()
+        return
+    elseif action == "NOLI_FEINT" then
+        NOLI.feint()
         return
     elseif BROADCAST_ACTIONS[action] then
         task.spawn(function() pcall(runBroadcast, action, LocalPlayer.Name, target) end)
@@ -10355,6 +11046,21 @@ else
                 end),
                 cmd(";unfnaf2", "Sair do FNAF 2 (tela preta e volta onde estava)", function()
                     WORLD.uncast("FNAF2")
+                end),
+            },
+        },
+        {
+            name = "Monstros", icon = "ghost",
+            section = "Monstros (vão atrás do alvo selecionado)", sectionIcon = "skull",
+            items = {
+                cmd(";noli",   "Mandar o Noli perseguir e atacar o alvo", function()
+                    NOLI.cast(selectedPlayerName)
+                end),
+                cmd(";unnoli", "Fazer o Noli ir embora", function()
+                    NOLI.cancelAll()
+                end),
+                cmd(";nolifinta", "Finta (mostra o aviso sem teleportar; deixa o próximo teleporte mais rápido)", function()
+                    NOLI.feint()
                 end),
             },
         },
