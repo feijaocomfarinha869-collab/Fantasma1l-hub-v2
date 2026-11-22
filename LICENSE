@@ -10104,7 +10104,8 @@ NOLI = { busy = false, cancelFlag = false, cdEnd = 0, token = 0, S = nil,
     MODEL_ID  = "77070809853563",                              -- modelo do Noli
     JUMP_IDS  = { "110927500079647", "85842282862173" },        -- jumpscares (aparecem com glitch na tela do alvo)
     LOAD_BG   = "117917201966243",                              -- fundo da tela de carregamento
-    
+    EXTRA_ID  = "83495935870383" }                              -- asset extra: som (tema/jumpscare) ou animação do Noli
+
 do
     local TweenService = game:GetService("TweenService")
     local Debris       = game:GetService("Debris")
